@@ -1,5 +1,8 @@
 #include "EEGFileReader.h"
 
+// Global SdFat object (will be defined in main files)
+extern SdFat sd;
+
 EEGFileReader::EEGFileReader() 
   : format_(FORMAT_INT32), num_channels_(9), 
     bytes_per_channel_(4), current_position_(0) {
@@ -7,21 +10,73 @@ EEGFileReader::EEGFileReader()
 }
 
 bool EEGFileReader::begin(const String& filename) {
-  file_ = SD.open(filename.c_str(), FILE_READ);
-  if (!file_) {
-    Serial.print("Failed to open file: ");
+  // First check if file exists
+  if (!sd.exists(filename.c_str())) {
+    Serial.print("ERROR: File does not exist: ");
     Serial.println(filename);
+    Serial.println("Available files on SD card:");
+    SdFile root;
+    if (root.open("/")) {
+      while (true) {
+        SdFile entry;
+        if (!entry.openNext(&root, O_RDONLY)) break;
+        char name[64];
+        entry.getName(name, sizeof(name));
+        Serial.print("  ");
+        Serial.print(name);
+        Serial.print(" (");
+        Serial.print(entry.fileSize());
+        Serial.println(" bytes)");
+        entry.close();
+      }
+      root.close();
+    } else {
+      Serial.println("ERROR: Cannot open root directory");
+    }
     return false;
   }
   
-  file_size_ = file_.size();
+  // Try to open the file
+  if (!file_.open(filename.c_str(), O_RDONLY)) {
+    Serial.print("ERROR: Failed to open file: ");
+    Serial.println(filename);
+    Serial.println("File exists but cannot be opened - check file permissions or corruption");
+    return false;
+  }
+  
+  file_size_ = file_.fileSize();
   current_position_ = 0;
   
-  Serial.print("Opened EEG file: ");
+  // Validate file size makes sense for our format
+  if (file_size_ == 0) {
+    Serial.println("ERROR: File is empty");
+    file_.close();
+    return false;
+  }
+  
+  // Check if file size is reasonable for EEG data
+  uint32_t expected_samples = file_size_ / bytes_per_sample_;
+  if (expected_samples == 0) {
+    Serial.println("ERROR: File too small for expected format");
+    Serial.print("File size: ");
+    Serial.print(file_size_);
+    Serial.print(" bytes, Expected bytes per sample: ");
+    Serial.println(bytes_per_sample_);
+    file_.close();
+    return false;
+  }
+  
+  Serial.print("SUCCESS: Opened EEG file: ");
   Serial.println(filename);
   Serial.print("File size: ");
   Serial.print(file_size_);
   Serial.println(" bytes");
+  Serial.print("Channels: ");
+  Serial.print(num_channels_);
+  Serial.print(", Bytes per sample: ");
+  Serial.println(bytes_per_sample_);
+  Serial.print("Total samples: ");
+  Serial.println(expected_samples);
   Serial.print("Estimated duration: ");
   Serial.print(getDurationSeconds(), 1);
   Serial.println(" seconds");
@@ -51,6 +106,7 @@ void EEGFileReader::setFormat(EEGDataFormat format, int channels) {
 
 bool EEGFileReader::readNextSample(float* channel_data) {
   if (!file_) {
+    Serial.println("ERROR: File not open in readNextSample");
     return false;
   }
   
@@ -59,9 +115,15 @@ bool EEGFileReader::readNextSample(float* channel_data) {
     return false; // End of file
   }
   
-  uint8_t raw_data[32]; // Max 8 channels * 4 bytes = 32 bytes
+  uint8_t raw_data[64]; // Increased buffer for 9 channels * 4 bytes = 36 bytes + margin
   
-  if (file_.read(raw_data, bytes_per_sample_) != bytes_per_sample_) {
+  int bytes_read = file_.read(raw_data, bytes_per_sample_);
+  if (bytes_read != (int)bytes_per_sample_) {
+    Serial.print("ERROR: Expected ");
+    Serial.print(bytes_per_sample_);
+    Serial.print(" bytes, but read ");
+    Serial.print(bytes_read);
+    Serial.println(" bytes");
     return false;
   }
   
@@ -104,6 +166,7 @@ void EEGFileReader::close() {
     file_.close();
   }
   current_position_ = 0;
+  file_size_ = 0;
 }
 
 float EEGFileReader::convertToFloat(uint8_t* raw_data, int channel) {

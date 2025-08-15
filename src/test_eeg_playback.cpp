@@ -1,26 +1,31 @@
 #include <Arduino.h>
 #include <SPI.h>
-#include <SD.h>
+#include <SdFat.h>
 #include "EEGFileReader.h"
 #include "EEGProcessor.h"
 #include "MLInference.h"
 #include "model.h"
+#include "Config.h"
+#include "BandpassFilter.h"
 
-// SD card setup - try different approaches for Teensy 4.1
-// For built-in SD, we might need to use different pins or SDIO
+// SdFat object for EEG file reading (matching colleague's setup)
+SdFat sd;
+
+// Configuration
+Config config;
+unsigned long SAMPLE_INTERVAL_US = 4000; // Will be set from config
 
 // EEG data components
 EEGFileReader eegReader;
 EEGProcessor eegProcessor;
 MLInference mlInference;
+BandpassFilter bandpassFilter;
 
 // Data buffers
 float eeg_sample[ADS1299_CHANNELS];
 float processed_window[MODEL_INPUT_SIZE];
 float ml_output[MODEL_OUTPUT_SIZE];
 
-// Timing control for 4000Hz playback  
-const unsigned long SAMPLE_INTERVAL_US = 250; // 1/4000Hz = 250µs
 unsigned long last_sample_time = 0;
 
 // Statistics and control
@@ -28,6 +33,9 @@ unsigned long sample_count = 0;
 unsigned long inference_count = 0;
 bool enable_inference = true;
 bool enable_serial_plot = true;
+
+// Processing variables
+unsigned long processed_count = 0;
 
 // Test parameters
 const float START_TIME_SECONDS = 0.0f;    // Start from beginning
@@ -49,24 +57,24 @@ void setup() {
   Serial.println("  r - Restart playback");
   Serial.println();
   
-  // Initialize SD card - try multiple approaches for Teensy 4.1
+  // Initialize SD card using SdFat library (matching colleague's setup)
   Serial.println("Initializing SD card...");
   bool sd_ok = false;
   
-  // Try approach 1: No pin specified (uses default)
-  if (SD.begin()) {
+  // Method 1: SdioConfig with FIFO (exactly like colleague's code)
+  if (sd.begin(SdioConfig(FIFO_SDIO))) {
     sd_ok = true;
-    Serial.println("SD initialized with default settings");
+    Serial.println("SD initialized with SdioConfig(FIFO_SDIO)");
   }
-  // Try approach 2: SDIO interface (faster on Teensy 4.1)
-  else if (SD.begin(BUILTIN_SDCARD)) {
+  // Method 2: Fallback to DMA SDIO
+  else if (sd.begin(SdioConfig(DMA_SDIO))) {
     sd_ok = true;
-    Serial.println("SD initialized with BUILTIN_SDCARD");
+    Serial.println("SD initialized with SdioConfig(DMA_SDIO)");
   }
-  // Try approach 3: Standard SPI pins
-  else if (SD.begin(10)) {
+  // Method 3: SPI fallback
+  else if (sd.begin(SdSpiConfig(10, DEDICATED_SPI, SD_SCK_MHZ(50)))) {
     sd_ok = true;
-    Serial.println("SD initialized with pin 10");
+    Serial.println("SD initialized with SPI interface");
   }
   
   if (!sd_ok) {
@@ -77,27 +85,49 @@ void setup() {
   } else {
     Serial.println("SD card initialized");
     
-    // Open EEG file
+    // Load configuration from SD card
+    Serial.println("Loading configuration...");
+    SdFile rootDir;
+    if (rootDir.open("/") && loadConfig(rootDir, config)) {
+      Serial.println("Configuration loaded successfully:");
+      Serial.print("  Datafile: ");
+      Serial.println(config.datafile);
+      Serial.print("  Sample rate: ");
+      Serial.print(config.sample_rate);
+      Serial.println(" Hz");
+      Serial.print("  Bipolar channels: ");
+      Serial.print(config.bipolar_channel_positive);
+      Serial.print(" - ");
+      Serial.println(config.bipolar_channel_negative);
+      
+      // Set sample interval based on config
+      SAMPLE_INTERVAL_US = 1000000 / config.sample_rate; // Convert Hz to microseconds
+      
+      rootDir.close();
+    } else {
+      Serial.println("Failed to load config.txt, using defaults");
+      config.datafile = "SdioLogger_miklos_night_2_Fs_250Hz.bin";
+      config.sample_rate = 100;
+      config.channels = 9;
+      config.bipolar_channel_positive = 0;
+      config.bipolar_channel_negative = 6;
+      SAMPLE_INTERVAL_US = 10000; // 100Hz
+    }
+    
+    // Open EEG file using config
     Serial.println("Opening EEG file...");
-    if (!eegReader.begin("SdioLogger_miklos_night_2.bin")) {
-      Serial.println("EEG file not found. Available files:");
-      File root = SD.open("/");
-      while (true) {
-        File entry = root.openNextFile();
-        if (!entry) break;
-        Serial.print("  ");
-        Serial.println(entry.name());
-        entry.close();
-      }
-      root.close();
+    if (!eegReader.begin(config.datafile)) {
       enable_inference = false;
     } else {
       Serial.println("EEG file opened successfully");
     }
   }
   
-  // Set format based on MATLAB analysis: int32, 9 channels
-  eegReader.setFormat(FORMAT_INT32, 9);
+  // Set format based on config
+  EEGDataFormat format = FORMAT_INT32;
+  if (config.format == "float32") format = FORMAT_FLOAT32;
+  else if (config.format == "int16") format = FORMAT_INT16;
+  eegReader.setFormat(format, config.channels);
   
   // Seek to start time if specified
   if (START_TIME_SECONDS > 0) {
@@ -142,26 +172,33 @@ void loop() {
     // Read next sample from file - no synthetic data fallback
     bool has_data = false;
     
-    if (SD.exists("SdioLogger_miklos_night_2.bin")) {
+    if (sd.exists(config.datafile.c_str())) {
       has_data = eegReader.readNextSample(eeg_sample);
       if (!has_data) {
-        Serial.println("ERROR: Failed to read from EEG file");
-        Serial.println("Check file format and integrity");
+        Serial.println("End of file reached or read error");
+        Serial.print("Total samples processed: ");
+        Serial.println(sample_count);
         while(1); // Stop execution
       }
     } else {
-      Serial.println("ERROR: EEG file 'SdioLogger_miklos_night_2.bin' not found on SD card");
+      Serial.print("ERROR: EEG file '");
+      Serial.print(config.datafile);
+      Serial.println("' not found on SD card");
       Serial.println("Available files:");
       // List files on SD card for debugging
-      File root = SD.open("/");
-      while (true) {
-        File entry = root.openNextFile();
-        if (!entry) break;
-        Serial.print("  ");
-        Serial.println(entry.name());
-        entry.close();
+      SdFile root;
+      if (root.open("/")) {
+        while (true) {
+          SdFile entry;
+          if (!entry.openNext(&root, O_RDONLY)) break;
+          char name[64];
+          entry.getName(name, sizeof(name));
+          Serial.print("  ");
+          Serial.println(name);
+          entry.close();
+        }
+        root.close();
       }
-      root.close();
       while(1); // Stop execution
     }
     
@@ -169,13 +206,21 @@ void loop() {
       sample_count++;
       last_sample_time = current_time;
       
-      // Add sample to processor for ML inference
+      // Create bipolar derivation (CH0 - CH6) for ML processing
+      float bipolar_sample = eeg_sample[config.bipolar_channel_positive] - eeg_sample[config.bipolar_channel_negative];
+      processed_count++;
+      
+      // Apply 0.5-40Hz bandpass filter
+      float filtered_sample = bandpassFilter.process(bipolar_sample);
+      
+      // Add to ML processor buffer (single channel)
+      // For now, still using the old multi-channel approach
       eegProcessor.addSample(eeg_sample);
       
       // Serial plotting output
       if (enable_serial_plot) {
-        // Time stamp (in seconds) - updated for 4000Hz
-        Serial.print((float)sample_count / 4000.0f, 3);
+        // Time stamp (in seconds) - using config sample rate
+        Serial.print((float)sample_count / config.sample_rate, 3);
         
         // EEG channel data
         for (int i = 0; i < ADS1299_CHANNELS; i++) {
@@ -223,7 +268,7 @@ void loop() {
       }
       
       // Check if we should stop (duration limit or end of file)
-      if (sample_count >= (MAX_DURATION_SECONDS * 4000)) {
+      if (sample_count >= (MAX_DURATION_SECONDS * config.sample_rate)) {
         Serial.println("Reached maximum test duration");
         while (1); // Stop here
       }
@@ -281,7 +326,7 @@ void printStatistics() {
   Serial.print("Samples processed: ");
   Serial.println(sample_count);
   Serial.print("Current playback time: ");
-  Serial.print((float)sample_count / 4000.0f, 1);
+  Serial.print((float)sample_count / config.sample_rate, 1);
   Serial.println(" seconds");
   Serial.print("Actual sample rate: ");
   Serial.print(sample_count / (millis() / 1000.0f), 1);

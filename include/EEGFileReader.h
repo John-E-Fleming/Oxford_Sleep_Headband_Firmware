@@ -1,7 +1,7 @@
 #pragma once
 
 #include <Arduino.h>
-#include <SD.h>
+#include <SdFat.h>
 
 // Common EEG data formats
 enum EEGDataFormat {
@@ -31,13 +31,13 @@ public:
   uint32_t getFileSize() const { return file_size_; }
   uint32_t getTotalSamples() const;
   float getDurationSeconds() const;
-  bool isOpen() const { return (bool)file_; }
+  bool isOpen() const { return file_size_ > 0; }
   
   // Close file
   void close();
 
 private:
-  File file_;
+  SdFile file_;
   EEGDataFormat format_;
   int num_channels_;
   int bytes_per_sample_;

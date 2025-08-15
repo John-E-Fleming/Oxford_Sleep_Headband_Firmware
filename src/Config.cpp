@@ -17,8 +17,25 @@ bool loadConfig(SdFile &cardRoot, Config &cfg) {
         key.trim(); val.trim();
         if (key == "datafile") {
           cfg.datafile = val;
+        } else if (key == "sample_rate") {
+          cfg.sample_rate = val.toInt();
+        } else if (key == "channels") {
+          cfg.channels = val.toInt();
+        } else if (key == "format") {
+          cfg.format = val;
+        } else if (key == "gain") {
+          cfg.gain = val.toInt();
+        } else if (key == "vref") {
+          cfg.vref = val.toFloat();
+        } else if (key == "bipolar_channel_positive") {
+          cfg.bipolar_channel_positive = val.toInt();
+        } else if (key == "bipolar_channel_negative") {
+          cfg.bipolar_channel_negative = val.toInt();
+        } else if (key == "ml_target_sample_rate") {
+          cfg.ml_target_sample_rate = val.toInt();
+        } else if (key == "ml_window_seconds") {
+          cfg.ml_window_seconds = val.toInt();
         }
-        // else if (key == "mode") { … }
       }
       line = "";
     } else {
