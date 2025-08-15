@@ -1,11 +1,11 @@
 #include "EEGProcessor.h"
 #include <math.h>
 
-EEGProcessor::EEGProcessor() : stats_initialized_(false) {
-  // Initialize channel statistics
+EEGProcessor::EEGProcessor() : filtered_mean_(0.0f), filtered_std_(1.0f), stats_initialized_(false) {
+  // Initialize channel statistics arrays
   for (int i = 0; i < ADS1299_CHANNELS; i++) {
     channel_means_[i] = 0.0f;
-    channel_stds_[i] = 1.0f;  // Start with unit variance
+    channel_stds_[i] = 1.0f;
   }
 }
 
@@ -16,21 +16,44 @@ bool EEGProcessor::begin() {
 }
 
 void EEGProcessor::addSample(float* channels) {
-  // Add all channels for this sample to ring buffer
+  // Add all channels for this sample to ring buffer (legacy support)
   for (int i = 0; i < ADS1299_CHANNELS; i++) {
     if (!sample_buffer_.push(channels[i])) {
       // Buffer full, this will overwrite oldest data automatically in ring buffer
       Serial.println("Sample buffer overflow");
     }
   }
+}
+
+void EEGProcessor::addFilteredSample(float sample) {
+  // Add single filtered sample to ML buffer
+  filtered_buffer_.push(sample);
   
   // Update running statistics for normalization
-  updateChannelStats(channels);
+  const float learning_rate = 0.001f;
+  
+  if (!stats_initialized_) {
+    filtered_mean_ = sample;
+    stats_initialized_ = true;
+    return;
+  }
+  
+  // Update mean and std for filtered data
+  float old_mean = filtered_mean_;
+  filtered_mean_ = old_mean + learning_rate * (sample - old_mean);
+  
+  float deviation = sample - filtered_mean_;
+  filtered_std_ = filtered_std_ + learning_rate * (abs(deviation) - filtered_std_);
+  
+  // Ensure std doesn't get too small
+  if (filtered_std_ < 0.1f) {
+    filtered_std_ = 0.1f;
+  }
 }
 
 bool EEGProcessor::isWindowReady() {
-  // Check if we have enough samples for a smaller window (reduced for testing)
-  return sample_buffer_.size() >= 1000;  // Much smaller window for memory constraints
+  // Check if we have enough samples for ML inference (30 seconds = 3000 samples at 100Hz)
+  return filtered_buffer_.size() >= ML_WINDOW_SIZE_SAMPLES;
 }
 
 bool EEGProcessor::getProcessedWindow(float* output_buffer) {
@@ -38,16 +61,25 @@ bool EEGProcessor::getProcessedWindow(float* output_buffer) {
     return false;
   }
   
-  // Use a much smaller window for memory constraints
-  const int small_window_size = 1000;
-  
-  // Get samples from ring buffer (most recent window)
-  int buffer_size = sample_buffer_.size();
-  int start_index = buffer_size - small_window_size;
+  // Get the most recent 30-second window from filtered buffer
+  int buffer_size = filtered_buffer_.size();
+  int start_index = buffer_size - ML_WINDOW_SIZE_SAMPLES;
   if (start_index < 0) start_index = 0;
   
-  for (int i = 0; i < small_window_size && i < MODEL_INPUT_SIZE; i++) {
-    output_buffer[i] = sample_buffer_[start_index + i];
+  // Copy and normalize the window
+  for (int i = 0; i < ML_WINDOW_SIZE_SAMPLES && i < MODEL_INPUT_SIZE; i++) {
+    float raw_sample = filtered_buffer_[start_index + i];
+    
+    if (stats_initialized_) {
+      // Z-score normalization: (x - mean) / std
+      output_buffer[i] = (raw_sample - filtered_mean_) / filtered_std_;
+      
+      // Clamp to reasonable range to prevent extreme values
+      if (output_buffer[i] > 5.0f) output_buffer[i] = 5.0f;
+      if (output_buffer[i] < -5.0f) output_buffer[i] = -5.0f;
+    } else {
+      output_buffer[i] = raw_sample;
+    }
   }
   
   return true;
@@ -57,26 +89,17 @@ void EEGProcessor::preprocessData(float* raw_data, float* processed_data, int le
   // Copy data first
   memcpy(processed_data, raw_data, length * sizeof(float));
   
-  // Apply channel-wise normalization
-  for (int sample = 0; sample < WINDOW_SIZE_SAMPLES; sample++) {
-    for (int ch = 0; ch < ADS1299_CHANNELS; ch++) {
-      int index = sample * ADS1299_CHANNELS + ch;
-      
-      if (stats_initialized_) {
-        // Z-score normalization: (x - mean) / std
-        processed_data[index] = (processed_data[index] - channel_means_[ch]) / channel_stds_[ch];
-      }
+  // Apply normalization to the provided length
+  for (int i = 0; i < length; i++) {
+    if (stats_initialized_) {
+      // For legacy compatibility, assume single channel normalization
+      processed_data[i] = (processed_data[i] - filtered_mean_) / filtered_std_;
       
       // Clamp to reasonable range to prevent extreme values
-      if (processed_data[index] > 5.0f) processed_data[index] = 5.0f;
-      if (processed_data[index] < -5.0f) processed_data[index] = -5.0f;
+      if (processed_data[i] > 5.0f) processed_data[i] = 5.0f;
+      if (processed_data[i] < -5.0f) processed_data[i] = -5.0f;
     }
   }
-  
-  // Additional preprocessing can be added here:
-  // - Bandpass filtering (0.5-35 Hz typical for sleep EEG)
-  // - Artifact rejection
-  // - Feature extraction (spectral features, etc.)
 }
 
 void EEGProcessor::updateChannelStats(float* sample) {

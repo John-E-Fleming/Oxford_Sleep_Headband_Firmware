@@ -213,19 +213,31 @@ void loop() {
       // Apply 0.5-40Hz bandpass filter
       float filtered_sample = bandpassFilter.process(bipolar_sample);
       
-      // Add to ML processor buffer (single channel)
-      // For now, still using the old multi-channel approach
-      eegProcessor.addSample(eeg_sample);
+      // Add filtered sample to ML processor buffer
+      eegProcessor.addFilteredSample(filtered_sample);
       
       // Serial plotting output
       if (enable_serial_plot) {
         // Time stamp (in seconds) - using config sample rate
         Serial.print((float)sample_count / config.sample_rate, 3);
         
-        // EEG channel data
-        for (int i = 0; i < ADS1299_CHANNELS; i++) {
-          Serial.print(",");
-          Serial.print(eeg_sample[i], 2);
+        // Key processing pipeline values for debugging
+        Serial.print(",CH0=");
+        Serial.print(eeg_sample[config.bipolar_channel_positive], 2);
+        Serial.print(",CH6=");
+        Serial.print(eeg_sample[config.bipolar_channel_negative], 2);
+        Serial.print(",Bipolar=");
+        Serial.print(bipolar_sample, 2);
+        Serial.print(",Filtered=");
+        Serial.print(filtered_sample, 2);
+        
+        // Show normalization stats if available
+        static int stats_counter = 0;
+        if (++stats_counter % 100 == 0) { // Every 100 samples (1 second)
+          Serial.print(",Mean=");
+          Serial.print(eegProcessor.getFilteredMean(), 4);
+          Serial.print(",Std=");
+          Serial.print(eegProcessor.getFilteredStd(), 4);
         }
         
         // ML inference (if enabled and ready)

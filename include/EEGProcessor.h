@@ -3,11 +3,11 @@
 #include <Arduino.h>
 #include "model.h"
 
-// EEG configuration - reduced for memory constraints
-#define ADS1299_CHANNELS 9      // 9 channels as per MATLAB code
-#define SAMPLE_RATE 4000        // 4000 Hz sampling rate from MATLAB
-#define WINDOW_SIZE_SECONDS 1   // Reduced to 1-second windows for memory constraints
-#define WINDOW_SIZE_SAMPLES (SAMPLE_RATE * WINDOW_SIZE_SECONDS)  // 4000 samples
+// EEG configuration for ML inference
+#define ADS1299_CHANNELS 9           // 9 channels as per MATLAB code
+#define ML_SAMPLE_RATE 100           // 100 Hz for ML processing 
+#define ML_WINDOW_SIZE_SECONDS 30    // 30-second windows for ML model
+#define ML_WINDOW_SIZE_SAMPLES (ML_SAMPLE_RATE * ML_WINDOW_SIZE_SECONDS)  // 3000 samples
 
 // Simple circular buffer for Teensy compatibility
 template<typename T, size_t N>
@@ -52,6 +52,9 @@ public:
   // Add new EEG sample (called from ADS1299 interrupt)
   void addSample(float* channels);
   
+  // Add single filtered sample for ML processing
+  void addFilteredSample(float sample);
+  
   // Check if enough data is available for inference
   bool isWindowReady();
   
@@ -60,15 +63,26 @@ public:
   
   // Apply preprocessing (filtering, normalization, etc.)
   void preprocessData(float* raw_data, float* processed_data, int length);
+  
+  // Get normalization statistics for debugging
+  float getFilteredMean() const { return filtered_mean_; }
+  float getFilteredStd() const { return filtered_std_; }
 
 private:
-  // Circular buffer for continuous data (much smaller for memory constraints)
+  // Circular buffer for multi-channel raw data (legacy)
   CircularBuffer<float, 2000> sample_buffer_;  // Fixed size: ~8KB for floats
   
+  // Circular buffer for single-channel filtered data (for ML inference)
+  CircularBuffer<float, ML_WINDOW_SIZE_SAMPLES> filtered_buffer_;  // 3000 samples = ~12KB
+  
   // Preprocessing parameters
+  float filtered_mean_;
+  float filtered_std_;
+  bool stats_initialized_;
+  
+  // Legacy multi-channel stats (kept for compatibility)
   float channel_means_[ADS1299_CHANNELS];
   float channel_stds_[ADS1299_CHANNELS];
-  bool stats_initialized_;
   
   // Helper functions
   void updateChannelStats(float* sample);
