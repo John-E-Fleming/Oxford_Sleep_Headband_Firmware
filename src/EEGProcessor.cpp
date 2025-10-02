@@ -1,7 +1,14 @@
 #include "EEGProcessor.h"
 #include <math.h>
 
-EEGProcessor::EEGProcessor() : filtered_mean_(0.0f), filtered_std_(1.0f), stats_initialized_(false) {
+EEGProcessor::EEGProcessor() : 
+    filtered_mean_(0.0f), 
+    filtered_std_(1.0f), 
+    stats_initialized_(false),
+    window_size_samples_(ML_WINDOW_SIZE_SAMPLES),
+    inference_interval_samples_(ML_INFERENCE_INTERVAL_SAMPLES),
+    samples_since_last_inference_(0),
+    first_window_ready_(false) {
   // Initialize channel statistics arrays
   for (int i = 0; i < ADS1299_CHANNELS; i++) {
     channel_means_[i] = 0.0f;
@@ -12,7 +19,27 @@ EEGProcessor::EEGProcessor() : filtered_mean_(0.0f), filtered_std_(1.0f), stats_
 bool EEGProcessor::begin() {
   // Initialize ring buffer (already done in constructor)
   Serial.println("EEG Processor initialized");
+  Serial.print("Window size: ");
+  Serial.print(window_size_samples_ / ML_SAMPLE_RATE);
+  Serial.println(" seconds");
+  Serial.print("Inference interval: ");
+  Serial.print(inference_interval_samples_ / ML_SAMPLE_RATE);
+  Serial.println(" seconds");
   return true;
+}
+
+void EEGProcessor::configureSlidingWindow(int window_seconds, int inference_interval_seconds) {
+  window_size_samples_ = window_seconds * ML_SAMPLE_RATE;
+  inference_interval_samples_ = inference_interval_seconds * ML_SAMPLE_RATE;
+  samples_since_last_inference_ = 0;
+  
+  Serial.print("Sliding window configured: ");
+  Serial.print(window_seconds);
+  Serial.print("s window, ");
+  Serial.print(inference_interval_seconds);
+  Serial.print("s interval (");
+  Serial.print(100.0f * (window_seconds - inference_interval_seconds) / window_seconds);
+  Serial.println("% overlap)");
 }
 
 void EEGProcessor::addSample(float* channels) {
@@ -28,6 +55,15 @@ void EEGProcessor::addSample(float* channels) {
 void EEGProcessor::addFilteredSample(float sample) {
   // Add single filtered sample to ML buffer
   filtered_buffer_.push(sample);
+  
+  // Track samples for sliding window inference timing
+  samples_since_last_inference_++;
+  
+  // Mark when we have enough samples for first window
+  if (!first_window_ready_ && filtered_buffer_.size() >= window_size_samples_) {
+    first_window_ready_ = true;
+    Serial.println("First inference window ready");
+  }
   
   // Update running statistics for normalization
   const float learning_rate = 0.001f;
@@ -52,8 +88,23 @@ void EEGProcessor::addFilteredSample(float sample) {
 }
 
 bool EEGProcessor::isWindowReady() {
-  // Check if we have enough samples for ML inference (30 seconds = 3000 samples at 100Hz)
-  return filtered_buffer_.size() >= ML_WINDOW_SIZE_SAMPLES;
+  // Check if we have enough samples for ML inference
+  return filtered_buffer_.size() >= window_size_samples_;
+}
+
+bool EEGProcessor::isInferenceTimeReady() {
+  // First window: wait for full window
+  if (!first_window_ready_) {
+    return isWindowReady();
+  }
+  
+  // Subsequent windows: check if we've collected enough new samples
+  return samples_since_last_inference_ >= inference_interval_samples_;
+}
+
+void EEGProcessor::markInferenceComplete() {
+  // Reset the sample counter for next inference interval
+  samples_since_last_inference_ = 0;
 }
 
 bool EEGProcessor::getProcessedWindow(float* output_buffer) {
@@ -61,13 +112,15 @@ bool EEGProcessor::getProcessedWindow(float* output_buffer) {
     return false;
   }
   
-  // Get the most recent 30-second window from filtered buffer
+  // Get the most recent window from filtered buffer
   int buffer_size = filtered_buffer_.size();
-  int start_index = buffer_size - ML_WINDOW_SIZE_SAMPLES;
+  int start_index = buffer_size - window_size_samples_;
   if (start_index < 0) start_index = 0;
   
   // Copy and normalize the window
-  for (int i = 0; i < ML_WINDOW_SIZE_SAMPLES && i < MODEL_INPUT_SIZE; i++) {
+  // Now using full 3000 samples as MODEL_INPUT_SIZE was fixed
+  int samples_to_copy = min(window_size_samples_, MODEL_INPUT_SIZE - 1);  // -1 for epoch index
+  for (int i = 0; i < samples_to_copy; i++) {
     float raw_sample = filtered_buffer_[start_index + i];
     
     if (stats_initialized_) {
@@ -81,6 +134,38 @@ bool EEGProcessor::getProcessedWindow(float* output_buffer) {
       output_buffer[i] = raw_sample;
     }
   }
+  
+  // Add epoch index as last element (will be set by caller)
+  output_buffer[samples_to_copy] = 0.0f;  // Placeholder for epoch index
+  
+  return true;
+}
+
+bool EEGProcessor::getProcessedWindowInt8(int8_t* output_buffer, float scale, int32_t zero_point, int epoch_index) {
+  // Get float window first
+  float temp_buffer[MODEL_INPUT_SIZE];
+  if (!getProcessedWindow(temp_buffer)) {
+    return false;
+  }
+  
+  // Quantize to INT8 (matching reference implementation)
+  int samples_to_quantize = min(window_size_samples_, MODEL_INPUT_SIZE - 1);
+  for (int i = 0; i < samples_to_quantize; i++) {
+    // Quantize using model's scale and zero point
+    int32_t quantized = round(temp_buffer[i] / scale) + zero_point;
+    
+    // Clamp to int8 range
+    if (quantized > 127) quantized = 127;
+    if (quantized < -128) quantized = -128;
+    
+    output_buffer[i] = static_cast<int8_t>(quantized);
+  }
+  
+  // Add quantized epoch index as last element
+  int32_t epoch_quantized = round(static_cast<float>(epoch_index) / scale) + zero_point;
+  if (epoch_quantized > 127) epoch_quantized = 127;
+  if (epoch_quantized < -128) epoch_quantized = -128;
+  output_buffer[samples_to_quantize] = static_cast<int8_t>(epoch_quantized);
   
   return true;
 }

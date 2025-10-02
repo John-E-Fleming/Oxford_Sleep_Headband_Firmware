@@ -8,10 +8,10 @@ extern const unsigned char model_tflite[];
 extern const int model_tflite_len;
 
 // Model input/output specifications  
-// Reduced for memory constraints on Teensy 4.1
-#define MODEL_INPUT_SIZE (1000)      // 1000 samples for testing (reduced from 16000)
-#define MODEL_OUTPUT_SIZE 4          // Adjust based on number of classes
-#define MODEL_TENSOR_ARENA_SIZE (10 * 1024)  // 10KB arena (reduced from 100KB)
+// Matching the reference implementation: 30 seconds at 100Hz + epoch index
+#define MODEL_INPUT_SIZE (3001)      // 3000 samples + 1 epoch index (matching reference)
+#define MODEL_OUTPUT_SIZE 5          // 5 classes: Wake, N1, N2, N3, REM (matching reference)
+#define MODEL_TENSOR_ARENA_SIZE (150 * 1024)  // 150KB arena (matching reference kTensorArenaSize1)
 
 // Sleep stage classification labels (example - update for your model)
 enum SleepStage {

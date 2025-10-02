@@ -9,6 +9,11 @@
 #define ML_WINDOW_SIZE_SECONDS 30    // 30-second windows for ML model
 #define ML_WINDOW_SIZE_SAMPLES (ML_SAMPLE_RATE * ML_WINDOW_SIZE_SECONDS)  // 3000 samples
 
+// Sliding window configuration for overlapping inference
+#define ML_INFERENCE_INTERVAL_SECONDS 10  // Perform inference every X seconds (configurable)
+#define ML_INFERENCE_INTERVAL_SAMPLES (ML_SAMPLE_RATE * ML_INFERENCE_INTERVAL_SECONDS)  // Samples between inferences
+#define ML_WINDOW_OVERLAP_PERCENT 66.7f   // Percentage of window that overlaps (e.g., 10s slide on 30s = 66.7%)
+
 // Simple circular buffer for Teensy compatibility
 template<typename T, size_t N>
 class CircularBuffer {
@@ -49,6 +54,9 @@ public:
   // Initialize the processor
   bool begin();
   
+  // Configure sliding window parameters
+  void configureSlidingWindow(int window_seconds, int inference_interval_seconds);
+  
   // Add new EEG sample (called from ADS1299 interrupt)
   void addSample(float* channels);
   
@@ -58,8 +66,17 @@ public:
   // Check if enough data is available for inference
   bool isWindowReady();
   
-  // Get processed window for ML inference
+  // Check if it's time for next inference (based on sliding interval)
+  bool isInferenceTimeReady();
+  
+  // Get processed window for ML inference (float version)
   bool getProcessedWindow(float* output_buffer);
+  
+  // Get processed window for ML inference (INT8 quantized version)
+  bool getProcessedWindowInt8(int8_t* output_buffer, float scale, int32_t zero_point, int epoch_index);
+  
+  // Reset inference timer after getting window
+  void markInferenceComplete();
   
   // Apply preprocessing (filtering, normalization, etc.)
   void preprocessData(float* raw_data, float* processed_data, int length);
@@ -73,7 +90,15 @@ private:
   CircularBuffer<float, 2000> sample_buffer_;  // Fixed size: ~8KB for floats
   
   // Circular buffer for single-channel filtered data (for ML inference)
-  CircularBuffer<float, ML_WINDOW_SIZE_SAMPLES> filtered_buffer_;  // 3000 samples = ~12KB
+  // Buffer size must be at least window size + max expected delay
+  static constexpr size_t BUFFER_SIZE = ML_WINDOW_SIZE_SAMPLES + 1000;  // Extra space for safety
+  CircularBuffer<float, BUFFER_SIZE> filtered_buffer_;  // Larger buffer for sliding windows
+  
+  // Sliding window parameters
+  int window_size_samples_;
+  int inference_interval_samples_;
+  int samples_since_last_inference_;
+  bool first_window_ready_;
   
   // Preprocessing parameters
   float filtered_mean_;

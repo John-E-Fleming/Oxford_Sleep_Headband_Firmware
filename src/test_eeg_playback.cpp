@@ -7,6 +7,8 @@
 #include "model.h"
 #include "Config.h"
 #include "BandpassFilter.h"
+#include "EEGQualityChecker.h"
+#include "InferenceLogger.h"
 
 // SdFat object for EEG file reading (matching colleague's setup)
 SdFat sd;
@@ -20,6 +22,8 @@ EEGFileReader eegReader;
 EEGProcessor eegProcessor;
 MLInference mlInference;
 BandpassFilter bandpassFilter;
+EEGQualityChecker qualityChecker;
+InferenceLogger inferenceLogger;
 
 // Data buffers
 float eeg_sample[ADS1299_CHANNELS];
@@ -33,6 +37,8 @@ unsigned long sample_count = 0;
 unsigned long inference_count = 0;
 bool enable_inference = true;
 bool enable_serial_plot = true;
+bool enable_quality_check = true;
+bool enable_inference_logging = true;
 
 // Processing variables
 unsigned long processed_count = 0;
@@ -40,6 +46,11 @@ unsigned long processed_count = 0;
 // Test parameters
 const float START_TIME_SECONDS = 0.0f;    // Start from beginning
 const float MAX_DURATION_SECONDS = 300.0f; // Test for 5 minutes max
+
+// Sliding window configuration
+const int INFERENCE_WINDOW_SECONDS = 30;   // 30-second analysis window
+const int INFERENCE_INTERVAL_SECONDS = 10; // Perform inference every 10 seconds
+const float WINDOW_OVERLAP_PERCENT = 100.0f * (INFERENCE_WINDOW_SECONDS - INFERENCE_INTERVAL_SECONDS) / INFERENCE_WINDOW_SECONDS;
 
 // Forward declarations
 void handleSerialCommands();
@@ -54,6 +65,9 @@ void setup() {
   Serial.println("  p - Toggle serial plotting");
   Serial.println("  i - Toggle ML inference");
   Serial.println("  s - Show statistics");
+  Serial.println("  q - Toggle quality checking");
+  Serial.println("  l - Toggle inference logging");
+  Serial.println("  x - Export log to SD card");
   Serial.println("  r - Restart playback");
   Serial.println();
   
@@ -137,11 +151,26 @@ void setup() {
     eegReader.seekToTime(START_TIME_SECONDS);
   }
   
-  // Initialize EEG processor
+  // Initialize EEG processor with sliding window configuration
   if (!eegProcessor.begin()) {
     Serial.println("Failed to initialize EEG processor");
     while (1);
   }
+  
+  // Configure sliding window parameters
+  eegProcessor.configureSlidingWindow(INFERENCE_WINDOW_SECONDS, INFERENCE_INTERVAL_SECONDS);
+  
+  // Initialize inference logger
+  if (enable_inference_logging) {
+    inferenceLogger.begin(1000); // Pre-allocate for 1000 records
+  }
+  Serial.print("Sliding window: ");
+  Serial.print(INFERENCE_WINDOW_SECONDS);
+  Serial.print("s window with ");
+  Serial.print(INFERENCE_INTERVAL_SECONDS);
+  Serial.print("s slide (");
+  Serial.print(WINDOW_OVERLAP_PERCENT, 1);
+  Serial.println("% overlap)")
   
   // Initialize ML inference (optional for initial testing)
   Serial.println("Initializing ML inference...");
@@ -240,12 +269,13 @@ void loop() {
           Serial.print(eegProcessor.getFilteredStd(), 4);
         }
         
-        // ML inference (if enabled and ready)
-        if (enable_inference && eegProcessor.isWindowReady()) {
-          static unsigned long last_inference = 0;
-          if (millis() - last_inference > 4000) { // Every 4 seconds
+        // ML inference with sliding window (if enabled and ready)
+        if (enable_inference && eegProcessor.isInferenceTimeReady()) {
             
             if (eegProcessor.getProcessedWindow(processed_window)) {
+              // Add epoch index as last input (matching reference implementation)
+              processed_window[3000] = static_cast<float>(inference_count);
+              
               if (mlInference.predict(processed_window, ml_output)) {
                 SleepStage predicted_stage = mlInference.getPredictedStage(ml_output);
                 
@@ -268,7 +298,7 @@ void loop() {
                 Serial.print(max_confidence, 3);
                 
                 inference_count++;
-                last_inference = millis();
+                eegProcessor.markInferenceComplete();  // Reset sliding window timer
               } else {
                 Serial.print(",ERROR,0.000");
               }
