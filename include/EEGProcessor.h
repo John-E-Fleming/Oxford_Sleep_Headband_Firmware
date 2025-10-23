@@ -10,7 +10,7 @@
 #define ML_WINDOW_SIZE_SAMPLES (ML_SAMPLE_RATE * ML_WINDOW_SIZE_SECONDS)  // 3000 samples
 
 // Sliding window configuration for overlapping inference
-#define ML_INFERENCE_INTERVAL_SECONDS 10  // Perform inference every X seconds (configurable)
+#define ML_INFERENCE_INTERVAL_SECONDS 5  // Perform inference every 5 seconds (66% overlap)
 #define ML_INFERENCE_INTERVAL_SAMPLES (ML_SAMPLE_RATE * ML_INFERENCE_INTERVAL_SECONDS)  // Samples between inferences
 #define ML_WINDOW_OVERLAP_PERCENT 66.7f   // Percentage of window that overlaps (e.g., 10s slide on 30s = 66.7%)
 
@@ -87,11 +87,11 @@ public:
 
 private:
   // Circular buffer for multi-channel raw data (legacy)
-  CircularBuffer<float, 2000> sample_buffer_;  // Fixed size: ~8KB for floats
+  CircularBuffer<float, 100> sample_buffer_;  // Minimal size: ~400 bytes for floats
   
   // Circular buffer for single-channel filtered data (for ML inference)
   // Buffer size must be at least window size + max expected delay
-  static constexpr size_t BUFFER_SIZE = ML_WINDOW_SIZE_SAMPLES + 1000;  // Extra space for safety
+  static constexpr size_t BUFFER_SIZE = ML_WINDOW_SIZE_SAMPLES + 100;   // Minimal safety margin
   CircularBuffer<float, BUFFER_SIZE> filtered_buffer_;  // Larger buffer for sliding windows
   
   // Sliding window parameters

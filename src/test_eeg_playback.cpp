@@ -172,14 +172,16 @@ void setup() {
   Serial.print(WINDOW_OVERLAP_PERCENT, 1);
   Serial.println("% overlap)")
   
-  // Initialize ML inference (optional for initial testing)
+  // Initialize ML inference
   Serial.println("Initializing ML inference...");
-  if (!mlInference.begin()) {
+  bool use_dummy_model = true;  // Set to false to use real TensorFlow Lite model
+  if (!mlInference.begin(use_dummy_model)) {
     Serial.println("ML inference initialization failed - continuing without ML");
     enable_inference = false;
   } else {
-    Serial.println("ML inference initialized");
-  }
+    Serial.print("ML inference ready (");
+    Serial.print(mlInference.isUsingRealModel() ? "real model" : "dummy model");
+    Serial.println(")");
   
   Serial.println("Starting EEG playback...");
   
@@ -288,10 +290,11 @@ void loop() {
                 
                 Serial.print(",");
                 switch (predicted_stage) {
-                  case WAKE: Serial.print("WAKE"); break;
-                  case LIGHT_SLEEP: Serial.print("LIGHT"); break;
-                  case DEEP_SLEEP: Serial.print("DEEP"); break;
-                  case REM_SLEEP: Serial.print("REM"); break;
+                  case N3_DEEP_SLEEP: Serial.print("N3"); break;    // yy0
+                  case N2_LIGHT_SLEEP: Serial.print("N2"); break;   // yy1
+                  case N1_VERY_LIGHT: Serial.print("N1"); break;    // yy2
+                  case REM_SLEEP: Serial.print("REM"); break;        // yy3
+                  case WAKE: Serial.print("WAKE"); break;            // yy4
                   default: Serial.print("UNKNOWN"); break;
                 }
                 Serial.print(",");

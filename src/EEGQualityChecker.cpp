@@ -86,7 +86,7 @@ EEGQualityChecker::QualityMetrics EEGQualityChecker::checkWindowQuality(
   if (metrics.artifact_percentage > max_artifact_percent_) {
     metrics.is_valid = false;
     metrics.amplitude_ok = false;
-    if (metrics.rejection_reason.isEmpty()) {
+    if (metrics.rejection_reason.length() == 0) {
       metrics.rejection_reason = "Too many artifacts (" + 
                                  String(metrics.artifact_percentage, 1) + "%)";
     }
@@ -96,7 +96,7 @@ EEGQualityChecker::QualityMetrics EEGQualityChecker::checkWindowQuality(
   if (clipping_count > num_samples * 0.01f) { // More than 1% clipped
     metrics.clipping_ok = false;
     metrics.is_valid = false;
-    if (metrics.rejection_reason.isEmpty()) {
+    if (metrics.rejection_reason.length() == 0) {
       metrics.rejection_reason = "Signal clipping detected";
     }
   }
@@ -105,7 +105,7 @@ EEGQualityChecker::QualityMetrics EEGQualityChecker::checkWindowQuality(
   if (detectFlatline(data, num_samples)) {
     metrics.flatline_ok = false;
     metrics.is_valid = false;
-    if (metrics.rejection_reason.isEmpty()) {
+    if (metrics.rejection_reason.length() == 0) {
       metrics.rejection_reason = "Electrode disconnection suspected";
     }
   }

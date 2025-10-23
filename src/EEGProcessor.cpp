@@ -2,13 +2,13 @@
 #include <math.h>
 
 EEGProcessor::EEGProcessor() : 
-    filtered_mean_(0.0f), 
-    filtered_std_(1.0f), 
-    stats_initialized_(false),
     window_size_samples_(ML_WINDOW_SIZE_SAMPLES),
     inference_interval_samples_(ML_INFERENCE_INTERVAL_SAMPLES),
     samples_since_last_inference_(0),
-    first_window_ready_(false) {
+    first_window_ready_(false),
+    filtered_mean_(0.0f), 
+    filtered_std_(1.0f), 
+    stats_initialized_(false) {
   // Initialize channel statistics arrays
   for (int i = 0; i < ADS1299_CHANNELS; i++) {
     channel_means_[i] = 0.0f;
@@ -60,7 +60,7 @@ void EEGProcessor::addFilteredSample(float sample) {
   samples_since_last_inference_++;
   
   // Mark when we have enough samples for first window
-  if (!first_window_ready_ && filtered_buffer_.size() >= window_size_samples_) {
+  if (!first_window_ready_ && filtered_buffer_.size() >= static_cast<size_t>(window_size_samples_)) {
     first_window_ready_ = true;
     Serial.println("First inference window ready");
   }
@@ -89,7 +89,7 @@ void EEGProcessor::addFilteredSample(float sample) {
 
 bool EEGProcessor::isWindowReady() {
   // Check if we have enough samples for ML inference
-  return filtered_buffer_.size() >= window_size_samples_;
+  return filtered_buffer_.size() >= static_cast<size_t>(window_size_samples_);
 }
 
 bool EEGProcessor::isInferenceTimeReady() {

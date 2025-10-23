@@ -1,15 +1,15 @@
 #pragma once
 
 #include <Arduino.h>
-#include <vector>
 #include "model.h"
 #include "EEGQualityChecker.h"
+#include <SdFat.h>
 
-// Comprehensive logging system for ML inference results and quality metrics
-// Enables post-hoc analysis of model performance against recorded EEG data
+// Streaming logging system for ML inference results and quality metrics
+// Writes directly to SD card to minimize memory usage
 class InferenceLogger {
 public:
-  // Complete record of each inference attempt
+  // Lightweight record structure for immediate writing
   struct InferenceRecord {
     // Timing information
     unsigned long timestamp_ms;        // Milliseconds since start
@@ -23,7 +23,7 @@ public:
     float snr_estimate;                // Signal-to-noise ratio
     float artifact_percentage;         // Percentage of artifacts in window
     int outlier_count;                 // Number of outliers detected
-    String rejection_reason;           // If rejected, why?
+    const char* rejection_reason;      // If rejected, why? (pointer to avoid String allocation)
     
     // Model outputs
     bool inference_performed;          // Whether inference ran (vs quality fail)
@@ -34,8 +34,6 @@ public:
     // Signal statistics (for debugging)
     float signal_mean;                 // Mean of processed window
     float signal_std;                  // Std deviation of processed window
-    float signal_min;                  // Min value in window
-    float signal_max;                  // Max value in window
     
     // Processing parameters (for reproducibility)
     int window_size_seconds;           // Window duration
@@ -44,8 +42,8 @@ public:
   
   InferenceLogger();
   
-  // Initialize logger with optional capacity pre-allocation
-  void begin(size_t initial_capacity = 1000);
+  // Initialize logger with streaming to SD card
+  bool begin(const String& filename = "");
   
   // Log a successful inference
   void logInference(unsigned long timestamp_ms, 
@@ -68,26 +66,19 @@ public:
                           float signal_mean,
                           float signal_std);
   
-  // Get records for analysis
-  const std::vector<InferenceRecord>& getRecords() const { return records_; }
-  size_t getRecordCount() const { return records_.size(); }
-  
-  // Export to CSV format (returns as String for Serial or SD writing)
-  String exportToCSV(bool include_header = true) const;
-  
-  // Export single record as CSV line
-  String recordToCSV(const InferenceRecord& record) const;
+  // Get record count
+  size_t getRecordCount() const { return record_count_; }
   
   // Get CSV header
   String getCSVHeader() const;
   
-  // Write to SD card file
-  bool saveToFile(const String& filename);
+  // Close the log file
+  void close();
   
-  // Clear all records
-  void clear();
+  // Check if logging is active
+  bool isLogging() const { return log_file_.isOpen(); }
   
-  // Get summary statistics
+  // Get summary statistics (real-time counters)
   struct SummaryStats {
     int total_attempts;
     int successful_inferences;
@@ -107,17 +98,21 @@ public:
   
   // Print summary to Serial
   void printSummary() const;
-  
-  // Find records by time range (for correlation with external events)
-  std::vector<InferenceRecord> findRecordsByTime(float start_seconds, float end_seconds) const;
-  
-  // Find transitions between sleep stages
-  std::vector<std::pair<int, int>> findStageTransitions() const;
 
 private:
-  std::vector<InferenceRecord> records_;
+  SdFile log_file_;
   bool initialized_;
+  size_t record_count_;
   
-  // Helper to get stage name
+  // Real-time statistics tracking (no memory storage)
+  SummaryStats stats_;
+  float total_confidence_sum_;
+  float total_snr_sum_;
+  float total_artifacts_sum_;
+  int quality_checks_count_;
+  
+  // Helper functions
   String getStageName(SleepStage stage) const;
+  String recordToCSV(const InferenceRecord& record) const;
+  void updateStats(const InferenceRecord& record);
 };
