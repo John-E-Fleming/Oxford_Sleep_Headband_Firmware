@@ -1,0 +1,11 @@
+# Python dependencies for ML pipeline testing and debugging
+# Install with: pip install -r requirements.txt
+
+# Core scientific computing
+numpy>=1.26.0
+
+# TensorFlow Lite for model inference testing
+tensorflow>=2.20.0
+
+# Visualization
+matplotlib>=3.8.0

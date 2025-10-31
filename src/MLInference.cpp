@@ -236,3 +236,20 @@ SleepStage MLInference::getPredictedStage(float* output_data) {
 
   return static_cast<SleepStage>(max_index);
 }
+
+bool MLInference::getInputQuantizationParams(float& scale, int32_t& zero_point) const {
+  if (!initialized_ || use_dummy_model_) {
+    // Return default quantization parameters for dummy model
+    scale = 1.0f;
+    zero_point = 0;
+    return false;
+  }
+
+  if (!input_tensor_) {
+    return false;
+  }
+
+  scale = input_tensor_->params.scale;
+  zero_point = input_tensor_->params.zero_point;
+  return true;
+}

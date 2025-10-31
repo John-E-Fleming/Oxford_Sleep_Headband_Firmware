@@ -129,3 +129,4 @@ Default ADS1299 pin assignments (modify in `ADS1299_Custom.h`):
 
 The firmware outputs CSV data for analysis:
 `Time,CH1,CH2,CH3,CH4,CH5,CH6,CH7,CH8,CH9[,Stage,Confidence]`
+- Yes, I was trying to plan debugging tests to make sure my code aligns with a colleague's old implementation of the firmware code and works for the model. The data in the "example_datasets/debug" folder is their data that I am trying to verify my data preprocessing steps in my updated firmware implementation to to make sure that our code agrees and predicts the same model outputs on the same dataset. Does that make sense?

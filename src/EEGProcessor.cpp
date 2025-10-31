@@ -111,33 +111,47 @@ bool EEGProcessor::getProcessedWindow(float* output_buffer) {
   if (!isWindowReady()) {
     return false;
   }
-  
+
   // Get the most recent window from filtered buffer
   int buffer_size = filtered_buffer_.size();
   int start_index = buffer_size - window_size_samples_;
   if (start_index < 0) start_index = 0;
-  
-  // Copy and normalize the window
-  // Now using full 3000 samples as MODEL_INPUT_SIZE was fixed
+
+  // Copy window to output buffer first
   int samples_to_copy = min(window_size_samples_, MODEL_INPUT_SIZE - 1);  // -1 for epoch index
   for (int i = 0; i < samples_to_copy; i++) {
-    float raw_sample = filtered_buffer_[start_index + i];
-    
-    if (stats_initialized_) {
-      // Z-score normalization: (x - mean) / std
-      output_buffer[i] = (raw_sample - filtered_mean_) / filtered_std_;
-      
-      // Clamp to reasonable range to prevent extreme values
-      if (output_buffer[i] > 5.0f) output_buffer[i] = 5.0f;
-      if (output_buffer[i] < -5.0f) output_buffer[i] = -5.0f;
-    } else {
-      output_buffer[i] = raw_sample;
-    }
+    output_buffer[i] = filtered_buffer_[start_index + i];
   }
-  
+
+  // Batch Z-score normalization (matching old implementation lines 1138-1139)
+  // Calculate mean
+  float sum = 0.0f;
+  for (int i = 0; i < samples_to_copy; i++) {
+    sum += output_buffer[i];
+  }
+  float mean = sum / samples_to_copy;
+
+  // Calculate standard deviation
+  float variance = 0.0f;
+  for (int i = 0; i < samples_to_copy; i++) {
+    float diff = output_buffer[i] - mean;
+    variance += diff * diff;
+  }
+  float std_dev = sqrt(variance / samples_to_copy);
+
+  // Ensure std doesn't divide by zero
+  if (std_dev < 1e-6f) {
+    std_dev = 1.0f;
+  }
+
+  // Apply Z-score normalization WITHOUT clipping
+  for (int i = 0; i < samples_to_copy; i++) {
+    output_buffer[i] = (output_buffer[i] - mean) / std_dev;
+  }
+
   // Add epoch index as last element (will be set by caller)
   output_buffer[samples_to_copy] = 0.0f;  // Placeholder for epoch index
-  
+
   return true;
 }
 
@@ -173,17 +187,31 @@ bool EEGProcessor::getProcessedWindowInt8(int8_t* output_buffer, float scale, in
 void EEGProcessor::preprocessData(float* raw_data, float* processed_data, int length) {
   // Copy data first
   memcpy(processed_data, raw_data, length * sizeof(float));
-  
-  // Apply normalization to the provided length
+
+  // Batch Z-score normalization on the provided data
+  // Calculate mean
+  float sum = 0.0f;
   for (int i = 0; i < length; i++) {
-    if (stats_initialized_) {
-      // For legacy compatibility, assume single channel normalization
-      processed_data[i] = (processed_data[i] - filtered_mean_) / filtered_std_;
-      
-      // Clamp to reasonable range to prevent extreme values
-      if (processed_data[i] > 5.0f) processed_data[i] = 5.0f;
-      if (processed_data[i] < -5.0f) processed_data[i] = -5.0f;
-    }
+    sum += processed_data[i];
+  }
+  float mean = sum / length;
+
+  // Calculate standard deviation
+  float variance = 0.0f;
+  for (int i = 0; i < length; i++) {
+    float diff = processed_data[i] - mean;
+    variance += diff * diff;
+  }
+  float std_dev = sqrt(variance / length);
+
+  // Ensure std doesn't divide by zero
+  if (std_dev < 1e-6f) {
+    std_dev = 1.0f;
+  }
+
+  // Apply Z-score normalization WITHOUT clipping
+  for (int i = 0; i < length; i++) {
+    processed_data[i] = (processed_data[i] - mean) / std_dev;
   }
 }
 

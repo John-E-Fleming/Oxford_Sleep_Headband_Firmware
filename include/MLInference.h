@@ -34,6 +34,9 @@ public:
   // Check if using real model or dummy
   bool isUsingRealModel() const { return !use_dummy_model_ && initialized_; }
 
+  // Get quantization parameters for INT8 input
+  bool getInputQuantizationParams(float& scale, int32_t& zero_point) const;
+
 private:
   // TensorFlow Lite components
   const tflite::Model* model_;
