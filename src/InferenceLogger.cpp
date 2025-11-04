@@ -219,11 +219,11 @@ void InferenceLogger::updateStats(const InferenceRecord& record) {
     
     // Count sleep stages using corrected mapping
     switch (record.predicted_stage) {
-      case N3_DEEP_SLEEP: stats_.n3_count++; break;    // yy0 = N3
-      case N2_LIGHT_SLEEP: stats_.n2_count++; break;   // yy1 = N2
-      case N1_VERY_LIGHT: stats_.n1_count++; break;    // yy2 = N1
-      case REM_SLEEP: stats_.rem_count++; break;        // yy3 = REM
-      case WAKE: stats_.wake_count++; break;            // yy4 = Wake
+      case WAKE: stats_.wake_count++; break;            // yy0 = Wake
+      case N1_VERY_LIGHT: stats_.n1_count++; break;    // yy1 = N1
+      case N2_LIGHT_SLEEP: stats_.n2_count++; break;   // yy2 = N2
+      case N3_DEEP_SLEEP: stats_.n3_count++; break;    // yy3 = N3
+      case REM_SLEEP: stats_.rem_count++; break;        // yy4 = REM
     }
   } else {
     stats_.quality_rejections++;
@@ -294,11 +294,11 @@ void InferenceLogger::printSummary() const {
 
 String InferenceLogger::getStageName(SleepStage stage) const {
   switch (stage) {
-    case N3_DEEP_SLEEP: return "N3";      // yy0 = N3 (Deep Sleep)
-    case N2_LIGHT_SLEEP: return "N2";     // yy1 = N2 (Light Sleep)
-    case N1_VERY_LIGHT: return "N1";      // yy2 = N1 (Very Light Sleep)
-    case REM_SLEEP: return "REM";         // yy3 = REM Sleep
-    case WAKE: return "WAKE";             // yy4 = Wake
+    case WAKE: return "WAKE";             // yy0 = Wake
+    case N1_VERY_LIGHT: return "N1";      // yy1 = N1 (Very Light Sleep)
+    case N2_LIGHT_SLEEP: return "N2";     // yy2 = N2 (Light Sleep)
+    case N3_DEEP_SLEEP: return "N3";      // yy3 = N3 (Deep Sleep)
+    case REM_SLEEP: return "REM";         // yy4 = REM Sleep
     default: return "UNKNOWN";
   }
 }

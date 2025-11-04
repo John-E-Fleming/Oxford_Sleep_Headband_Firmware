@@ -105,10 +105,11 @@ void loop() {
           // Print sleep stage prediction
           Serial.print(",");
           switch (predicted_stage) {
-            case WAKE: Serial.print("WAKE"); break;
-            case LIGHT_SLEEP: Serial.print("LIGHT"); break;
-            case DEEP_SLEEP: Serial.print("DEEP"); break;
-            case REM_SLEEP: Serial.print("REM"); break;
+            case WAKE: Serial.print("WAKE"); break;           // yy0
+            case N1_VERY_LIGHT: Serial.print("N1"); break;    // yy1
+            case N2_LIGHT_SLEEP: Serial.print("N2"); break;   // yy2
+            case N3_DEEP_SLEEP: Serial.print("N3"); break;    // yy3
+            case REM_SLEEP: Serial.print("REM"); break;       // yy4
             default: Serial.print("UNKNOWN"); break;
           }
           Serial.print(",");

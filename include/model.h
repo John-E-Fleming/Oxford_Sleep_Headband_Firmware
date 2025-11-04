@@ -14,17 +14,17 @@ extern const int model_tflite_len;
 #define MODEL_OUTPUT_SIZE 5          // 5 classes: Wake, N1, N2, N3, REM (matching reference)
 #define MODEL_TENSOR_ARENA_SIZE (160 * 1024)   // 160KB arena to accommodate model needs
 
-// Sleep stage classification labels - CORRECTED MAPPING from reference firmware
-// Model output indices correspond to:
-// Index 0 (yy0) = N3 (Deep Sleep)
-// Index 1 (yy1) = N2 (Light Sleep) 
-// Index 2 (yy2) = N1 (Very Light Sleep)
-// Index 3 (yy3) = REM Sleep
-// Index 4 (yy4) = Wake
+// Sleep stage classification labels - CORRECT MAPPING from reference firmware
+// Model output indices correspond to (verified from comp_comp_firm 1.ino:1158-1172):
+// Index 0 (yy0) = Wake
+// Index 1 (yy1) = N1 (Very Light Sleep)
+// Index 2 (yy2) = N2 (Light Sleep)
+// Index 3 (yy3) = N3 (Deep Sleep)
+// Index 4 (yy4) = REM Sleep
 enum SleepStage {
-  N3_DEEP_SLEEP = 0,    // yy0 - Deep sleep (N3)
-  N2_LIGHT_SLEEP = 1,   // yy1 - Light sleep (N2)
-  N1_VERY_LIGHT = 2,    // yy2 - Very light sleep (N1)
-  REM_SLEEP = 3,        // yy3 - REM sleep
-  WAKE = 4              // yy4 - Wake
+  WAKE = 0,             // yy0 - Wake
+  N1_VERY_LIGHT = 1,    // yy1 - Very light sleep (N1)
+  N2_LIGHT_SLEEP = 2,   // yy2 - Light sleep (N2)
+  N3_DEEP_SLEEP = 3,    // yy3 - Deep sleep (N3)
+  REM_SLEEP = 4         // yy4 - REM sleep
 };

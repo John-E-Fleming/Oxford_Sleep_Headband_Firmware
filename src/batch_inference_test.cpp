@@ -354,11 +354,11 @@ void printFinalResults() {
 
 String getStageName(SleepStage stage) {
   switch (stage) {
-    case N3_DEEP_SLEEP: return "N3";      // yy0 - Deep sleep (N3)
-    case N2_LIGHT_SLEEP: return "N2";     // yy1 - Light sleep (N2)
-    case N1_VERY_LIGHT: return "N1";      // yy2 - Very light sleep (N1)
-    case REM_SLEEP: return "REM";         // yy3 - REM sleep
-    case WAKE: return "WAKE";             // yy4 - Wake
+    case WAKE: return "WAKE";             // yy0 - Wake
+    case N1_VERY_LIGHT: return "N1";      // yy1 - Very light sleep (N1)
+    case N2_LIGHT_SLEEP: return "N2";     // yy2 - Light sleep (N2)
+    case N3_DEEP_SLEEP: return "N3";      // yy3 - Deep sleep (N3)
+    case REM_SLEEP: return "REM";         // yy4 - REM sleep
     default: return "UNKNOWN";
   }
 }

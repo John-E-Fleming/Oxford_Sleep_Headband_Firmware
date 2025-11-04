@@ -155,24 +155,25 @@ bool MLInference::predict(float* input_data, float* output_data, int epoch_index
     float mean_sample = sum / 100.0f;
 
     // Create somewhat realistic sleep stage probabilities
+    // Correct mapping: [0]=Wake, [1]=N1, [2]=N2, [3]=N3, [4]=REM
     if (mean_sample > 1.0f) {
-      output_data[0] = 0.03f; // N3
-      output_data[1] = 0.05f; // N2
-      output_data[2] = 0.1f;  // N1
-      output_data[3] = 0.02f; // REM
-      output_data[4] = 0.8f;  // WAKE
+      output_data[0] = 0.8f;  // WAKE
+      output_data[1] = 0.1f;  // N1
+      output_data[2] = 0.05f; // N2
+      output_data[3] = 0.03f; // N3
+      output_data[4] = 0.02f; // REM
     } else if (mean_sample < -1.0f) {
-      output_data[0] = 0.4f;  // N3
-      output_data[1] = 0.3f;  // N2
-      output_data[2] = 0.1f;  // N1
-      output_data[3] = 0.1f;  // REM
-      output_data[4] = 0.1f;  // WAKE
+      output_data[0] = 0.1f;  // WAKE
+      output_data[1] = 0.1f;  // N1
+      output_data[2] = 0.3f;  // N2
+      output_data[3] = 0.4f;  // N3
+      output_data[4] = 0.1f;  // REM
     } else {
-      output_data[0] = 0.1f;  // N3
-      output_data[1] = 0.25f; // N2
-      output_data[2] = 0.3f;  // N1
-      output_data[3] = 0.15f; // REM
-      output_data[4] = 0.2f;  // WAKE
+      output_data[0] = 0.2f;  // WAKE
+      output_data[1] = 0.3f;  // N1
+      output_data[2] = 0.25f; // N2
+      output_data[3] = 0.1f;  // N3
+      output_data[4] = 0.15f; // REM
     }
 
     last_inference_time_us_ = micros() - start_time;

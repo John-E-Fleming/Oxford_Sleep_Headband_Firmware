@@ -3,10 +3,35 @@
 // Global SdFat object (will be defined in main files)
 extern SdFat sd;
 
-EEGFileReader::EEGFileReader() 
-  : format_(FORMAT_INT32), num_channels_(9), 
-    bytes_per_channel_(4), current_position_(0) {
+EEGFileReader::EEGFileReader()
+  : format_(FORMAT_INT32), num_channels_(9),
+    bytes_per_channel_(4), current_position_(0),
+    buffer_position_(0), buffer_valid_bytes_(0),
+    buffering_enabled_(true) {
   bytes_per_sample_ = num_channels_ * bytes_per_channel_;
+
+  // Allocate buffer in external RAM (EXTMEM) for optimal performance
+  read_buffer_ = (uint8_t*)extmem_malloc(BUFFER_SIZE);
+  if (!read_buffer_) {
+    Serial.println("WARNING: Failed to allocate read buffer in EXTMEM, trying regular malloc");
+    read_buffer_ = (uint8_t*)malloc(BUFFER_SIZE);
+    if (!read_buffer_) {
+      Serial.println("ERROR: Failed to allocate read buffer! Buffering disabled.");
+      buffering_enabled_ = false;
+    } else {
+      Serial.println("EEG buffered reading: ENABLED (regular malloc)");
+    }
+  } else {
+    Serial.println("EEG buffered reading: ENABLED (EXTMEM)");
+  }
+}
+
+EEGFileReader::~EEGFileReader() {
+  close();
+  if (read_buffer_) {
+    free(read_buffer_);  // Works for both extmem_malloc and malloc
+    read_buffer_ = nullptr;
+  }
 }
 
 bool EEGFileReader::begin(const String& filename) {
@@ -105,18 +130,56 @@ void EEGFileReader::setFormat(EEGDataFormat format, int channels) {
 }
 
 bool EEGFileReader::readNextSample(float* channel_data) {
+  // Use buffered reading if enabled, otherwise fall back to direct reading
+  if (!buffering_enabled_ || !read_buffer_) {
+    return readNextSampleDirect(channel_data);
+  }
+
   if (!file_) {
-    Serial.println("ERROR: File not open in readNextSample");
+    Serial.println("ERROR: File not open");
     return false;
   }
-  
+
+  // Check if we have enough data left in file
+  if (current_position_ + bytes_per_sample_ > file_size_) {
+    return false; // End of file
+  }
+
+  // Refill buffer if needed
+  if (buffer_position_ + bytes_per_sample_ > buffer_valid_bytes_) {
+    if (!refillBuffer()) {
+      return false;  // EOF or read error
+    }
+  }
+
+  // Read from buffer instead of file
+  uint8_t raw_data[64];
+  memcpy(raw_data, read_buffer_ + buffer_position_, bytes_per_sample_);
+  buffer_position_ += bytes_per_sample_;
+  current_position_ += bytes_per_sample_;
+
+  // Convert raw data to float values for each channel
+  for (int ch = 0; ch < num_channels_; ch++) {
+    channel_data[ch] = convertToFloat(raw_data, ch);
+  }
+
+  return true;
+}
+
+bool EEGFileReader::readNextSampleDirect(float* channel_data) {
+  // Original unbuffered implementation
+  if (!file_) {
+    Serial.println("ERROR: File not open in readNextSampleDirect");
+    return false;
+  }
+
   // Check if we have enough data left
   if (current_position_ + bytes_per_sample_ > file_size_) {
     return false; // End of file
   }
-  
-  uint8_t raw_data[64]; // Increased buffer for 9 channels * 4 bytes = 36 bytes + margin
-  
+
+  uint8_t raw_data[64]; // Buffer for 9 channels * 4 bytes = 36 bytes + margin
+
   int bytes_read = file_.read(raw_data, bytes_per_sample_);
   if (bytes_read != (int)bytes_per_sample_) {
     Serial.print("ERROR: Expected ");
@@ -126,30 +189,81 @@ bool EEGFileReader::readNextSample(float* channel_data) {
     Serial.println(" bytes");
     return false;
   }
-  
+
   current_position_ += bytes_per_sample_;
-  
+
   // Convert raw data to float values for each channel
   for (int ch = 0; ch < num_channels_; ch++) {
     channel_data[ch] = convertToFloat(raw_data, ch);
   }
-  
+
   return true;
+}
+
+bool EEGFileReader::refillBuffer() {
+  // Calculate how many bytes remain in the file
+  uint32_t bytes_remaining = file_size_ - current_position_;
+
+  if (bytes_remaining == 0) {
+    return false;  // End of file
+  }
+
+  // Read as much as possible (up to BUFFER_SIZE)
+  int bytes_to_read = min((uint32_t)BUFFER_SIZE, bytes_remaining);
+
+  // Debug: Print first few buffer refills
+  static int refill_count = 0;
+  if (refill_count < 5) {
+    Serial.print("[BUFFER] Refilling buffer #");
+    Serial.print(refill_count);
+    Serial.print(" - reading ");
+    Serial.print(bytes_to_read);
+    Serial.println(" bytes");
+    refill_count++;
+  }
+
+  int bytes_read = file_.read(read_buffer_, bytes_to_read);
+
+  if (bytes_read <= 0) {
+    Serial.println("ERROR: Failed to refill buffer from SD card");
+    return false;
+  }
+
+  buffer_valid_bytes_ = bytes_read;
+  buffer_position_ = 0;
+
+  return true;
+}
+
+void EEGFileReader::enableBuffering(bool enable) {
+  buffering_enabled_ = enable;
+
+  // Reset buffer state when toggling
+  buffer_position_ = 0;
+  buffer_valid_bytes_ = 0;
+
+  Serial.print("EEG buffered reading: ");
+  Serial.println(enable ? "ENABLED" : "DISABLED");
 }
 
 bool EEGFileReader::seekToTime(float seconds) {
   uint32_t sample_number = (uint32_t)(seconds * SAMPLE_RATE);
   uint32_t byte_position = sample_number * bytes_per_sample_;
-  
+
   if (byte_position >= file_size_) {
     return false;
   }
-  
+
   if (file_.seek(byte_position)) {
     current_position_ = byte_position;
+
+    // Invalidate buffer after seek
+    buffer_position_ = 0;
+    buffer_valid_bytes_ = 0;
+
     return true;
   }
-  
+
   return false;
 }
 
@@ -167,6 +281,10 @@ void EEGFileReader::close() {
   }
   current_position_ = 0;
   file_size_ = 0;
+
+  // Reset buffer state
+  buffer_position_ = 0;
+  buffer_valid_bytes_ = 0;
 }
 
 float EEGFileReader::convertToFloat(uint8_t* raw_data, int channel) {

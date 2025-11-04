@@ -43,11 +43,12 @@ if sys.platform == 'win32':
 # Model constants (matching model.h in firmware)
 MODEL_INPUT_SIZE = 3001  # 3000 EEG samples + 1 epoch index
 MODEL_EEG_SAMPLES = 3000  # 30 seconds at 100Hz
-MODEL_OUTPUT_SIZE = 5     # 5 classes: N3, N2, N1, REM, Wake
+MODEL_OUTPUT_SIZE = 5     # 5 classes: Wake, N1, N2, N3, REM (verified from comp_comp_firm 1.ino)
 ML_SAMPLE_RATE = 100      # 100Hz
 
-# Sleep stage names (matching model.h enum)
-SLEEP_STAGE_NAMES = ['N3_Deep', 'N2_Light', 'N1_VeryLight', 'REM', 'Wake']
+# Sleep stage names (matching model.h enum) - CORRECT MAPPING
+# Index 0: Wake, 1: N1, 2: N2, 3: N3, 4: REM
+SLEEP_STAGE_NAMES = ['Wake', 'N1', 'N2', 'N3', 'REM']
 
 # Reference data directory
 DEBUG_DIR = Path('data/example_datasets/debug')
@@ -413,12 +414,13 @@ def visualize_results(ref_predictions, our_predictions, ref_probabilities, our_p
     gs = fig.add_gridspec(4, 1, height_ratios=[1, 1, 2, 2], hspace=0.3)
 
     # Sleep stage colors (matching typical sleep visualization)
+    # CORRECT MAPPING: 0=Wake, 1=N1, 2=N2, 3=N3, 4=REM
     stage_colors = {
-        0: '#2E4057',  # N3 - Dark blue (deep sleep)
-        1: '#048A81',  # N2 - Teal (light sleep)
-        2: '#54C6EB',  # N1 - Light blue (very light sleep)
-        3: '#8E7DBE',  # REM - Purple
-        4: '#F18F01'   # Wake - Orange
+        0: '#F18F01',  # Wake - Orange
+        1: '#54C6EB',  # N1 - Light blue (very light sleep)
+        2: '#048A81',  # N2 - Teal (light sleep)
+        3: '#2E4057',  # N3 - Dark blue (deep sleep)
+        4: '#8E7DBE'   # REM - Purple
     }
 
     # 1. Reference Hypnogram

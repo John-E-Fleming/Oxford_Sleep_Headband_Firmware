@@ -58,7 +58,7 @@ unsigned long processed_count = 0;
 
 // Test parameters
 const float START_TIME_SECONDS = 0.0f;    // Start from beginning
-const float MAX_DURATION_SECONDS = 300.0f; // Test for 5 minutes max
+const float MAX_DURATION_SECONDS = 3600.0f; // Test for 1 hour (change to 28800.0f for full 8 hours)
 
 // Sliding window configuration
 const int INFERENCE_WINDOW_SECONDS = 30;   // 30-second analysis window
@@ -354,11 +354,11 @@ void loop() {
                 // Convert predicted stage to string for debug logging
                 const char* stage_str = "UNKNOWN";
                 switch (predicted_stage) {
-                  case N3_DEEP_SLEEP: stage_str = "N3"; break;    // yy0
-                  case N2_LIGHT_SLEEP: stage_str = "N2"; break;   // yy1
-                  case N1_VERY_LIGHT: stage_str = "N1"; break;    // yy2
-                  case REM_SLEEP: stage_str = "REM"; break;        // yy3
-                  case WAKE: stage_str = "WAKE"; break;            // yy4
+                  case WAKE: stage_str = "WAKE"; break;            // yy0
+                  case N1_VERY_LIGHT: stage_str = "N1"; break;    // yy1
+                  case N2_LIGHT_SLEEP: stage_str = "N2"; break;   // yy2
+                  case N3_DEEP_SLEEP: stage_str = "N3"; break;    // yy3
+                  case REM_SLEEP: stage_str = "REM"; break;        // yy4
                 }
 
                 // Debug logging: Log model output probabilities
