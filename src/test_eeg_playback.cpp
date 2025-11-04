@@ -58,7 +58,7 @@ unsigned long processed_count = 0;
 
 // Test parameters
 const float START_TIME_SECONDS = 0.0f;    // Start from beginning
-const float MAX_DURATION_SECONDS = 3600.0f; // Test for 1 hour (change to 28800.0f for full 8 hours)
+const float MAX_DURATION_SECONDS = 300.0f; // Test for 5 minutes (change to 3600.0f for 1 hour, 28800.0f for full 8 hours)
 
 // Sliding window configuration
 const int INFERENCE_WINDOW_SECONDS = 30;   // 30-second analysis window
