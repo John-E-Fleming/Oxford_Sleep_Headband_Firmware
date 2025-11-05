@@ -5,10 +5,13 @@
 const char* DebugLogger::FILE_PREPROCESSED = "debug_preprocessed_100hz.csv";
 const char* DebugLogger::FILE_NORMALIZED = "debug_normalized.csv";
 const char* DebugLogger::FILE_QUANTIZED = "debug_quantized.csv";
-const char* DebugLogger::FILE_MODEL_OUTPUT = "debug_model_output.csv";
+// FILE_MODEL_OUTPUT is now dynamic - stored in output_filename_
 
 DebugLogger::DebugLogger()
   : sd_(nullptr), initialized_(false), enabled_(false), row_buffer_(nullptr) {
+  // Initialize with default filename
+  strncpy(output_filename_, "debug_model_output.csv", sizeof(output_filename_) - 1);
+  output_filename_[sizeof(output_filename_) - 1] = '\0';
 }
 
 bool DebugLogger::begin(SdFat* sd) {
@@ -35,6 +38,44 @@ void DebugLogger::setEnabled(bool enabled) {
   enabled_ = enabled;
   Serial.print("Debug logging: ");
   Serial.println(enabled_ ? "ENABLED" : "DISABLED");
+}
+
+void DebugLogger::setOutputFilename(const char* input_filename) {
+  // Extract basename from input filename and append "_model_predictions.csv"
+  // Example: "SdioLogger_miklos_night_2.bin" -> "SdioLogger_miklos_night_2_model_predictions.csv"
+
+  if (!input_filename || strlen(input_filename) == 0) {
+    // Keep default if no filename provided
+    return;
+  }
+
+  // Find the last dot (extension separator)
+  const char* dot = strrchr(input_filename, '.');
+  int basename_len;
+
+  if (dot) {
+    // Calculate length up to the dot
+    basename_len = dot - input_filename;
+  } else {
+    // No extension, use entire filename
+    basename_len = strlen(input_filename);
+  }
+
+  // Ensure we don't overflow the buffer
+  // Reserve space for "_model_predictions.csv" (23 chars) + null terminator
+  if (basename_len > (int)(sizeof(output_filename_) - 24)) {
+    basename_len = sizeof(output_filename_) - 24;
+  }
+
+  // Copy basename
+  strncpy(output_filename_, input_filename, basename_len);
+  output_filename_[basename_len] = '\0';
+
+  // Append suffix
+  strcat(output_filename_, "_model_predictions.csv");
+
+  Serial.print("Debug output filename set to: ");
+  Serial.println(output_filename_);
 }
 
 bool DebugLogger::fileExists(const char* filename) {
@@ -154,13 +195,13 @@ bool DebugLogger::logModelOutput(float* output, int output_size, int epoch_index
   if (!enabled_ || !initialized_) return false;
 
   // Create header if file doesn't exist
-  if (!fileExists(FILE_MODEL_OUTPUT)) {
+  if (!fileExists(output_filename_)) {
     SdFile file;
-    if (!file.open(FILE_MODEL_OUTPUT, O_WRONLY | O_CREAT | O_TRUNC)) {
+    if (!file.open(output_filename_, O_WRONLY | O_CREAT | O_TRUNC)) {
       Serial.println("DebugLogger: Failed to create model output file");
       return false;
     }
-    file.println("Epoch,Time_s,N3,N2,N1,REM,WAKE,Predicted_Stage");
+    file.println("Epoch,Time_s,Wake,N1,N2,N3,REM,Predicted_Stage");
     file.close();
   }
 
@@ -174,5 +215,5 @@ bool DebugLogger::logModelOutput(float* output, int output_size, int epoch_index
   }
   offset += snprintf(row_buffer_ + offset, BUFFER_SIZE - offset, ",%s\n", predicted_stage);
 
-  return appendRow(FILE_MODEL_OUTPUT, row_buffer_);
+  return appendRow(output_filename_, row_buffer_);
 }

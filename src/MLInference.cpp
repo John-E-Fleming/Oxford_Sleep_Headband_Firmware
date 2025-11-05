@@ -2,12 +2,12 @@
 
 // Static objects for TFLite (must persist for lifetime of interpreter)
 namespace {
-  tflite::MicroMutableOpResolver<12> micro_op_resolver;
+  tflite::MicroMutableOpResolver<13> micro_op_resolver;
 }
 
 MLInference::MLInference()
   : model_(nullptr), interpreter_(nullptr),
-    input_tensor_(nullptr), output_tensor_(nullptr),
+    input_tensor_(nullptr), input_tensor_epoch_(nullptr), output_tensor_(nullptr),
     tensor_arena_(nullptr), tensor_arena_is_extmem_(false),
     initialized_(false), use_dummy_model_(false), last_inference_time_us_(0) {
 }
@@ -77,6 +77,7 @@ bool MLInference::begin(bool use_dummy) {
   micro_op_resolver.AddAdd();
   micro_op_resolver.AddDequantize();
   micro_op_resolver.AddRelu();
+  micro_op_resolver.AddConcatenation();
 
   // Allocate tensor arena
   tensor_arena_ = (uint8_t*)extmem_malloc(MODEL_TENSOR_ARENA_SIZE);
@@ -110,28 +111,88 @@ bool MLInference::begin(bool use_dummy) {
     return false;
   }
 
-  // Get input and output tensors
-  input_tensor_ = interpreter_->input(0);
+  // Get input and output tensors (model has 2 inputs: EEG data + epoch index)
+  input_tensor_ = interpreter_->input(0);        // EEG data tensor
+  input_tensor_epoch_ = interpreter_->input(1);  // Epoch index tensor
   output_tensor_ = interpreter_->output(0);
 
-  // Verify input tensor size
-  int input_elements = input_tensor_->bytes / sizeof(int8_t);
-  Serial.print("Input tensor size: ");
-  Serial.print(input_elements);
-  Serial.println(" elements (int8)");
+  // Store tensor types for runtime handling
+  input_type_ = input_tensor_->type;
+  input_epoch_type_ = input_tensor_epoch_->type;
+  output_type_ = output_tensor_->type;
 
-  if (input_elements != MODEL_INPUT_SIZE) {
+  // Helper function to get type name
+  auto getTypeName = [](TfLiteType type) -> const char* {
+    switch (type) {
+      case kTfLiteFloat32: return "FLOAT32";
+      case kTfLiteInt8: return "INT8";
+      case kTfLiteUInt8: return "UINT8";
+      case kTfLiteInt32: return "INT32";
+      default: return "UNKNOWN";
+    }
+  };
+
+  // Helper function to get type size
+  auto getTypeSize = [](TfLiteType type) -> int {
+    switch (type) {
+      case kTfLiteFloat32: return 4;
+      case kTfLiteInt32: return 4;
+      case kTfLiteInt8: return 1;
+      case kTfLiteUInt8: return 1;
+      default: return 1;
+    }
+  };
+
+  // Print input tensor 0 (EEG data) info
+  int type_size_0 = getTypeSize(input_type_);
+  int input_eeg_elements = input_tensor_->bytes / type_size_0;
+  Serial.print("Input tensor 0 (EEG): ");
+  Serial.print(input_eeg_elements);
+  Serial.print(" elements (");
+  Serial.print(getTypeName(input_type_));
+  Serial.print("), shape: ");
+  for (int i = 0; i < input_tensor_->dims->size; i++) {
+    if (i > 0) Serial.print("x");
+    Serial.print(input_tensor_->dims->data[i]);
+  }
+  Serial.println();
+
+  if (input_eeg_elements != MODEL_EEG_SAMPLES) {
     Serial.print("WARNING: Expected ");
-    Serial.print(MODEL_INPUT_SIZE);
-    Serial.print(" inputs but model has ");
-    Serial.println(input_elements);
+    Serial.print(MODEL_EEG_SAMPLES);
+    Serial.print(" EEG samples but model has ");
+    Serial.println(input_eeg_elements);
   }
 
-  // Verify output tensor size
-  int output_elements = output_tensor_->bytes / sizeof(int8_t);
-  Serial.print("Output tensor size: ");
+  // Print input tensor 1 (Epoch index) info
+  int type_size_1 = getTypeSize(input_epoch_type_);
+  int input_epoch_elements = input_tensor_epoch_->bytes / type_size_1;
+  Serial.print("Input tensor 1 (Epoch): ");
+  Serial.print(input_epoch_elements);
+  Serial.print(" elements (");
+  Serial.print(getTypeName(input_epoch_type_));
+  Serial.print("), shape: ");
+  for (int i = 0; i < input_tensor_epoch_->dims->size; i++) {
+    if (i > 0) Serial.print("x");
+    Serial.print(input_tensor_epoch_->dims->data[i]);
+  }
+  Serial.println();
+
+  // Print output tensor info
+  int type_size_out = getTypeSize(output_type_);
+  int output_elements = output_tensor_->bytes / type_size_out;
+  Serial.print("Output tensor: ");
   Serial.print(output_elements);
-  Serial.println(" elements (int8)");
+  Serial.print(" elements (");
+  Serial.print(getTypeName(output_type_));
+  Serial.println(")");
+
+  if (output_elements != MODEL_OUTPUT_SIZE) {
+    Serial.print("WARNING: Expected ");
+    Serial.print(MODEL_OUTPUT_SIZE);
+    Serial.print(" outputs but model has ");
+    Serial.println(output_elements);
+  }
 
   initialized_ = true;
   Serial.println("TensorFlow Lite Micro initialized successfully");
@@ -180,19 +241,39 @@ bool MLInference::predict(float* input_data, float* output_data, int epoch_index
     return true;
   }
 
-  // Real model inference - following reference implementation
+  // Real model inference - dual input architecture
   // Input data is already z-score normalized by EEGProcessor
 
-  // Quantize and copy EEG samples to input tensor (3000 samples)
-  for (int i = 0; i < MODEL_EEG_SAMPLES; i++) {
-    int8_t x_quantized = input_data[i] / input_tensor_->params.scale + input_tensor_->params.zero_point;
-    input_tensor_->data.int8[i] = x_quantized;
+  // Populate Input Tensor 0: EEG samples (shape: 1, 1, 3000, 1)
+  if (input_type_ == kTfLiteFloat32) {
+    // FLOAT32 model - copy data directly
+    for (int i = 0; i < MODEL_EEG_SAMPLES; i++) {
+      input_tensor_->data.f[i] = input_data[i];
+    }
+  } else if (input_type_ == kTfLiteInt8) {
+    // INT8 quantized model - quantize data
+    for (int i = 0; i < MODEL_EEG_SAMPLES; i++) {
+      int8_t x_quantized = input_data[i] / input_tensor_->params.scale + input_tensor_->params.zero_point;
+      input_tensor_->data.int8[i] = x_quantized;
+    }
+  } else {
+    Serial.println("ERROR: Unsupported input tensor type");
+    return false;
   }
 
-  // Add epoch index as 3001st input (quantized)
+  // Populate Input Tensor 1: Epoch index (shape: 1, 1)
   float f_epoch = (float)epoch_index;
-  int8_t epoch_quantized = f_epoch / input_tensor_->params.scale + input_tensor_->params.zero_point;
-  input_tensor_->data.int8[MODEL_EEG_SAMPLES] = epoch_quantized;
+  if (input_epoch_type_ == kTfLiteFloat32) {
+    // FLOAT32 - copy directly
+    input_tensor_epoch_->data.f[0] = f_epoch;
+  } else if (input_epoch_type_ == kTfLiteInt8) {
+    // INT8 - quantize
+    int8_t epoch_quantized = f_epoch / input_tensor_epoch_->params.scale + input_tensor_epoch_->params.zero_point;
+    input_tensor_epoch_->data.int8[0] = epoch_quantized;
+  } else {
+    Serial.println("ERROR: Unsupported epoch tensor type");
+    return false;
+  }
 
   // Run inference
   TfLiteStatus invoke_status = interpreter_->Invoke();
@@ -201,10 +282,21 @@ bool MLInference::predict(float* input_data, float* output_data, int epoch_index
     return false;
   }
 
-  // Dequantize output tensor (5 outputs)
-  for (int i = 0; i < MODEL_OUTPUT_SIZE; i++) {
-    int8_t y_quantized = output_tensor_->data.int8[i];
-    output_data[i] = (y_quantized - output_tensor_->params.zero_point) * output_tensor_->params.scale;
+  // Extract output tensor (5 outputs)
+  if (output_type_ == kTfLiteFloat32) {
+    // FLOAT32 output - copy directly
+    for (int i = 0; i < MODEL_OUTPUT_SIZE; i++) {
+      output_data[i] = output_tensor_->data.f[i];
+    }
+  } else if (output_type_ == kTfLiteInt8) {
+    // INT8 output - dequantize
+    for (int i = 0; i < MODEL_OUTPUT_SIZE; i++) {
+      int8_t y_quantized = output_tensor_->data.int8[i];
+      output_data[i] = (y_quantized - output_tensor_->params.zero_point) * output_tensor_->params.scale;
+    }
+  } else {
+    Serial.println("ERROR: Unsupported output tensor type");
+    return false;
   }
 
   // Debug output for first few inferences

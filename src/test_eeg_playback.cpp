@@ -58,7 +58,7 @@ unsigned long processed_count = 0;
 
 // Test parameters
 const float START_TIME_SECONDS = 0.0f;    // Start from beginning
-const float MAX_DURATION_SECONDS = 300.0f; // Test for 5 minutes (change to 3600.0f for 1 hour, 28800.0f for full 8 hours)
+const float MAX_DURATION_SECONDS = 30000.0f; // 8 hours 20 min buffer (ensures entire file is processed)
 
 // Sliding window configuration
 const int INFERENCE_WINDOW_SECONDS = 30;   // 30-second analysis window
@@ -197,6 +197,8 @@ void setup() {
   // Initialize debug logger
   if (debugLogger.begin(&sd)) {
     Serial.println("Debug logger ready (use 'd' to enable)");
+    // Set output filename based on input data file
+    debugLogger.setOutputFilename(config.datafile.c_str());
   } else {
     Serial.println("Debug logger failed to initialize");
   }

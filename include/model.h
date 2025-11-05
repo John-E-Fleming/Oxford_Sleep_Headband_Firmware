@@ -8,10 +8,12 @@ extern const unsigned char model_tflite[];
 extern const int model_tflite_len;
 
 // Model input/output specifications
-// Matching the reference implementation: 30 seconds at 100Hz + epoch index
-#define MODEL_INPUT_SIZE (3001)      // 3000 EEG samples + 1 epoch index
-#define MODEL_EEG_SAMPLES (3000)     // 30 seconds at 100Hz = 3000 samples
-#define MODEL_OUTPUT_SIZE 5          // 5 classes: Wake, N1, N2, N3, REM (matching reference)
+// DUAL-INPUT ARCHITECTURE: Model has 2 separate input tensors
+// Input 0: EEG data - shape (1, 1, 3000, 1) = 3000 int8 elements
+// Input 1: Epoch index - shape (1, 1) = 1 int8 element
+#define MODEL_INPUT_SIZE (3001)      // Legacy: Total elements (kept for compatibility)
+#define MODEL_EEG_SAMPLES (3000)     // 30 seconds at 100Hz = 3000 samples (Input 0 size)
+#define MODEL_OUTPUT_SIZE 5          // 5 classes: Wake, N1, N2, N3, REM
 #define MODEL_TENSOR_ARENA_SIZE (160 * 1024)   // 160KB arena to accommodate model needs
 
 // Sleep stage classification labels - CORRECT MAPPING from reference firmware

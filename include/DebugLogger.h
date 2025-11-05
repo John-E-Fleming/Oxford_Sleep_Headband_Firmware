@@ -16,6 +16,9 @@ public:
   void setEnabled(bool enabled);
   bool isEnabled() const { return enabled_; }
 
+  // Set output filename based on input data file
+  void setOutputFilename(const char* input_filename);
+
   // Log 100Hz preprocessed data (3000 samples)
   bool logPreprocessed100Hz(float* data, int length, int epoch_index);
 
@@ -40,7 +43,10 @@ private:
   static const char* FILE_PREPROCESSED;
   static const char* FILE_NORMALIZED;
   static const char* FILE_QUANTIZED;
-  static const char* FILE_MODEL_OUTPUT;
+  // FILE_MODEL_OUTPUT is dynamic - stored in output_filename_
+
+  // Dynamic output filename (based on input data file)
+  char output_filename_[80];  // Buffer for "<basename>_model_predictions.csv"
 
   // Buffer for building CSV rows (needs to be large for 3000 samples)
   static constexpr int BUFFER_SIZE = 40000;  // ~30KB + margin

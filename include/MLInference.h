@@ -41,8 +41,14 @@ private:
   // TensorFlow Lite components
   const tflite::Model* model_;
   tflite::MicroInterpreter* interpreter_;
-  TfLiteTensor* input_tensor_;
+  TfLiteTensor* input_tensor_;        // Input 0: EEG data (shape: 1,1,3000,1)
+  TfLiteTensor* input_tensor_epoch_;  // Input 1: Epoch index (shape: 1,1)
   TfLiteTensor* output_tensor_;
+
+  // Tensor type tracking (for FLOAT32 vs INT8 handling)
+  TfLiteType input_type_;
+  TfLiteType input_epoch_type_;
+  TfLiteType output_type_;
 
   // Memory management
   uint8_t* tensor_arena_;
