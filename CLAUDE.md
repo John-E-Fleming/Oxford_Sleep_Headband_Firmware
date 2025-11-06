@@ -2,6 +2,23 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## ⚠️ PENDING FIX: TensorFlow Lite Library Version
+
+**ACTION REQUIRED**: See `PENDING_TFLITE_FIX.md` for complete details.
+
+**Status**: Windows long paths enabled, computer restart required to complete fix.
+
+**Issue**: Firmware uses wrong TensorFlow Lite library version (Chirale 2.0.0 instead of official tensorflow/tflite-micro-arduino-examples commit 2be8092d9f167b1473f072ff5794364819df8b52). This causes prediction mismatches with Python reference implementation.
+
+**After Restart**:
+1. Update `platformio.ini` line 18 to use correct library URL
+2. Rebuild with `pio run --target clean && pio run`
+3. Expected validation result: ~94.1% agreement (currently lower with wrong library)
+
+See `PENDING_TFLITE_FIX.md` for step-by-step instructions.
+
+---
+
 ## Project Overview
 
 This is a PlatformIO project for a sleep headband firmware running on Teensy 4.1, designed to:

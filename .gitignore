@@ -13,6 +13,7 @@ results/
 
 # Claude-related files
 .claude/
+CLAUDE.md
 
 # Example code
 example_code/

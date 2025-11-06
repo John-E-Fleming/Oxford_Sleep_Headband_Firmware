@@ -1,66 +1,83 @@
 #include "PreprocessingPipeline.h"
 
 PreprocessingPipeline::PreprocessingPipeline()
-  : downsample_500hz_count_(0), downsample_100hz_count_(0) {
+  : downsample_250hz_count_(0), resample_count_(0), output_phase_(0) {
   reset();
 }
 
 void PreprocessingPipeline::reset() {
-  betaFilter_.reset();
-  notchFilter_.reset();
+  trainingFilter_.reset();
 
   // Clear downsampling buffers
-  for (int i = 0; i < 8; i++) {
-    downsample_500hz_buffer_[i] = 0.0f;
+  for (int i = 0; i < 16; i++) {
+    downsample_250hz_buffer_[i] = 0.0f;
   }
   for (int i = 0; i < 5; i++) {
-    downsample_100hz_buffer_[i] = 0.0f;
+    resample_buffer_[i] = 0.0f;
   }
 
-  downsample_500hz_count_ = 0;
-  downsample_100hz_count_ = 0;
+  downsample_250hz_count_ = 0;
+  resample_count_ = 0;
+  output_phase_ = 0;
 }
 
 bool PreprocessingPipeline::processSample(float input_4000hz, float& output_100hz) {
-  // Stage 1: Accumulate samples for 4000Hz → 500Hz downsampling
-  downsample_500hz_buffer_[downsample_500hz_count_] = input_4000hz;
-  downsample_500hz_count_++;
+  /*
+   * Preprocessing pipeline matching training script:
+   * 1. Downsample 4000Hz → 250Hz (average every 16 samples)
+   * 2. Apply Butterworth bandpass filter (0.5-30 Hz) at 250Hz
+   * 3. Resample 250Hz → 100Hz (5:2 rational resampling)
+   */
 
-  // Check if we have 8 samples to average (4000Hz → 500Hz)
-  if (downsample_500hz_count_ < 8) {
+  // Stage 1: Accumulate samples for 4000Hz → 250Hz downsampling
+  downsample_250hz_buffer_[downsample_250hz_count_] = input_4000hz;
+  downsample_250hz_count_++;
+
+  // Check if we have 16 samples to average (4000Hz → 250Hz)
+  if (downsample_250hz_count_ < 16) {
     return false;  // Need more samples
   }
 
-  // Average every 8 samples to get 500Hz
-  float sum_500hz = 0.0f;
-  for (int i = 0; i < 8; i++) {
-    sum_500hz += downsample_500hz_buffer_[i];
+  // Average every 16 samples to get 250Hz
+  float sum_250hz = 0.0f;
+  for (int i = 0; i < 16; i++) {
+    sum_250hz += downsample_250hz_buffer_[i];
   }
-  float sample_500hz = sum_500hz / 8.0f;
-  downsample_500hz_count_ = 0;  // Reset for next group
+  float sample_250hz = sum_250hz / 16.0f;
+  downsample_250hz_count_ = 0;  // Reset for next group
 
-  // Stage 2: Apply beta bandpass filter at 500Hz
-  float filtered_500hz = betaFilter_.process(sample_500hz);
+  // Stage 2: Apply training Butterworth bandpass filter (0.5-30 Hz) at 250Hz
+  float filtered_250hz = trainingFilter_.process(sample_250hz);
 
-  // Stage 3: Apply notch filters at 500Hz
-  float notched_500hz = notchFilter_.process(filtered_500hz);
+  // Stage 3: Fractional resampling 250Hz → 100Hz (5:2 ratio)
+  // We collect 5 samples at 250Hz and output 2 samples at 100Hz
+  // This gives us exactly 100Hz: 5 samples / 250 Hz = 0.02 seconds = 2 samples / 100 Hz
 
-  // Stage 4: Accumulate samples for 500Hz → 100Hz downsampling
-  downsample_100hz_buffer_[downsample_100hz_count_] = notched_500hz;
-  downsample_100hz_count_++;
+  resample_buffer_[resample_count_] = filtered_250hz;
+  resample_count_++;
 
-  // Check if we have 5 samples to average (500Hz → 100Hz)
-  if (downsample_100hz_count_ < 5) {
+  // Check if we have 5 samples for resampling
+  if (resample_count_ < 5) {
     return false;  // Need more samples
   }
 
-  // Average every 5 samples to get 100Hz (matching old code lines 772-773)
-  float sum_100hz = 0.0f;
-  for (int i = 0; i < 5; i++) {
-    sum_100hz += downsample_100hz_buffer_[i];
-  }
-  output_100hz = sum_100hz / 5.0f;
-  downsample_100hz_count_ = 0;  // Reset for next group
+  // Use linear interpolation to generate 2 output samples from 5 input samples
+  // Output sample 0 is at position 0.0 (first input sample)
+  // Output sample 1 is at position 2.5 (between 2nd and 3rd input sample)
 
-  return true;  // New 100Hz sample ready
+  if (output_phase_ == 0) {
+    // First output: use first sample directly (position 0.0)
+    output_100hz = resample_buffer_[0];
+    output_phase_ = 1;
+    return true;  // Output first of two samples
+  } else {
+    // Second output: interpolate at position 2.5
+    // This is halfway between sample 2 and sample 3 (0-indexed)
+    output_100hz = (resample_buffer_[2] + resample_buffer_[3]) * 0.5f;
+
+    // Reset for next group of 5 samples
+    resample_count_ = 0;
+    output_phase_ = 0;
+    return true;  // Output second of two samples
+  }
 }

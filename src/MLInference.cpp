@@ -97,7 +97,7 @@ bool MLInference::begin(bool use_dummy) {
 
   // Build interpreter
   interpreter_ = new tflite::MicroInterpreter(
-    model_, micro_op_resolver, tensor_arena_, MODEL_TENSOR_ARENA_SIZE);
+    model_, micro_op_resolver, tensor_arena_, MODEL_TENSOR_ARENA_SIZE, nullptr);
 
   if (!interpreter_) {
     Serial.println("Failed to create interpreter");

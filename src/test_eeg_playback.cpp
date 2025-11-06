@@ -11,6 +11,11 @@
 #include "InferenceLogger.h"
 #include "DebugLogger.h"
 
+// Include validation support if enabled
+#ifdef ENABLE_VALIDATION_MODE
+#include "ValidationReader.h"
+#endif
+
 // SdFat object for EEG file reading (matching colleague's setup)
 SdFat sd;
 
@@ -26,6 +31,11 @@ PreprocessingPipeline preprocessingPipeline;
 EEGQualityChecker qualityChecker;
 InferenceLogger inferenceLogger;
 DebugLogger debugLogger;
+
+// Validation support (optional, enabled with ENABLE_VALIDATION_MODE flag)
+#ifdef ENABLE_VALIDATION_MODE
+ValidationReader validationReader;
+#endif
 
 // Playback speed control (MUST BE DECLARED BEFORE USAGE BELOW)
 const bool FAST_PLAYBACK = true;  // Set to true to process as fast as possible (no timing delays)
@@ -223,6 +233,22 @@ void setup() {
     Serial.println(")");
   }
 
+  // Initialize validation mode (if enabled)
+#ifdef ENABLE_VALIDATION_MODE
+  Serial.println();
+  Serial.println("=== VALIDATION MODE ENABLED ===");
+  if (validationReader.begin("data/reference_predictions.csv", &sd)) {
+    Serial.print("Validation ready with ");
+    Serial.print(validationReader.getNumEpochs());
+    Serial.println(" reference predictions");
+  } else {
+    Serial.println("WARNING: Validation mode enabled but failed to load reference predictions");
+    Serial.println("Make sure data/reference_predictions.csv exists on SD card");
+  }
+  Serial.println("===============================");
+  Serial.println();
+#endif
+
   Serial.println("Starting EEG playback...");
   
   if (enable_serial_plot) {
@@ -254,6 +280,14 @@ void loop() {
         Serial.println("End of file reached or read error");
         Serial.print("Total samples processed: ");
         Serial.println(sample_count);
+
+        // Print validation summary if enabled
+#ifdef ENABLE_VALIDATION_MODE
+        if (validationReader.isLoaded()) {
+          validationReader.printSummary();
+        }
+#endif
+
         while(1); // Stop execution
       }
     } else {
@@ -369,6 +403,13 @@ void loop() {
                   debugLogger.logModelOutput(ml_output, MODEL_OUTPUT_SIZE, inference_count, time_s, stage_str);
                 }
 
+                // Validation: Compare against reference predictions (if enabled)
+#ifdef ENABLE_VALIDATION_MODE
+                if (validationReader.isLoaded()) {
+                  validationReader.compareAndLog(inference_count, ml_output, stage_str);
+                }
+#endif
+
                 inference_count++;
                 eegProcessor.markInferenceComplete();  // Reset sliding window timer
 
@@ -409,6 +450,14 @@ void loop() {
       // Check if we should stop (duration limit or end of file)
       if (sample_count >= (MAX_DURATION_SECONDS * config.sample_rate)) {
         Serial.println("Reached maximum test duration");
+
+        // Print validation summary if enabled
+#ifdef ENABLE_VALIDATION_MODE
+        if (validationReader.isLoaded()) {
+          validationReader.printSummary();
+        }
+#endif
+
         while (1); // Stop here
       }
       
@@ -419,6 +468,14 @@ void loop() {
       Serial.println(sample_count);
       Serial.print("Total inferences: ");
       Serial.println(inference_count);
+
+      // Print validation summary if enabled
+#ifdef ENABLE_VALIDATION_MODE
+      if (validationReader.isLoaded()) {
+        validationReader.printSummary();
+      }
+#endif
+
       while (1); // Stop here
     }
   }

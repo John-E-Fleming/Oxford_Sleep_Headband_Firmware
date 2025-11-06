@@ -1,0 +1,26 @@
+Simple Export Contents:
+
+1. 1_bandpassed_eeg_single_channel.npy
+   - Single channel EEG (Ch1-Ch7 bipolar)
+   - Downsampled to 100Hz, bandpass filtered 0.5-30Hz
+   - Shape: (2880000,) samples = 8.0 hours
+
+2. 2_standardized_epochs.npy  
+   - 30-second epochs, z-score normalized per epoch
+   - Shape: (960, 3000) = 960 epochs × 30 seconds
+
+3. 3_quantized_model_predictions.npy
+   - Sleep stage predictions from quantized model
+   - Shape: (960,) 
+   - Values: 0=Wake, 1=N1, 2=N2, 3=N3, 4=REM
+
+4. 4_quantized_model_probabilities.npy
+   - Probability distributions for each epoch
+   - Shape: (960, 5) = probabilities for each stage
+
+5. 5_training_script.py
+   - Complete training script for fold 14 quantized model
+   - Achieves 85.89% accuracy with 88.1% size reduction
+
+6. 6_quantized_model_output_visualization.png
+   - Hypnogram and probability heatmap visualization
