@@ -249,6 +249,11 @@ void setup() {
     Serial.print("Validation ready with ");
     Serial.print(validationReader.getNumEpochs());
     Serial.println(" reference predictions");
+
+    // Enable prediction logging to SD card for confusion matrix analysis
+    if (validationReader.enablePredictionLogging("data/teensy_predictions.csv")) {
+      Serial.println("Teensy predictions will be saved to: data/teensy_predictions.csv");
+    }
   } else {
     Serial.println("WARNING: Validation mode enabled but failed to load reference predictions");
     Serial.println("Make sure data/reference_predictions.csv exists on SD card");

@@ -49,9 +49,17 @@ public:
   float getMeanMSE() const;
 
   // Print summary statistics
-  void printSummary() const;
+  void printSummary();
+
+  // Enable saving Teensy predictions to CSV file
+  bool enablePredictionLogging(const char* output_filename);
+  void closePredictionLog();
 
 private:
+  // Output file for Teensy predictions
+  SdFile output_file_;
+  bool logging_enabled_;
+  SdFat* sd_ptr_;
   // Storage for reference predictions (allocated in external RAM)
   ReferencePrediction* predictions_;
   int num_epochs_;

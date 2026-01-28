@@ -9,7 +9,8 @@
 #include <ctype.h>
 
 ValidationReader::ValidationReader()
-  : predictions_(nullptr), num_epochs_(0), num_compared_(0), num_matches_(0), total_mse_(0.0f) {
+  : predictions_(nullptr), num_epochs_(0), num_compared_(0), num_matches_(0), total_mse_(0.0f),
+    logging_enabled_(false), sd_ptr_(nullptr) {
   // Memory allocation deferred to begin() method
 }
 
@@ -36,6 +37,8 @@ bool ValidationReader::begin(const char* filename, SdFat* sd) {
     Serial.println("ERROR: SD card not initialized");
     return false;
   }
+
+  sd_ptr_ = sd;  // Store SD pointer for later use
 
   Serial.print("Loading reference predictions from: ");
   Serial.println(filename);
@@ -182,6 +185,31 @@ bool ValidationReader::compareAndLog(int epoch_num,
     Serial.println(mse, 6);
   }
 
+  // Write prediction to CSV file if logging enabled
+  if (logging_enabled_ && output_file_.isOpen()) {
+    // Format: Epoch,Teensy_Stage,Reference_Stage,Match,Wake,N1,N2,N3,REM,MSE
+    output_file_.print(epoch_num);
+    output_file_.print(",");
+    output_file_.print(measured_stage);
+    output_file_.print(",");
+    output_file_.print(ref.predicted_stage);
+    output_file_.print(",");
+    output_file_.print(match ? "1" : "0");
+    output_file_.print(",");
+    // Write probabilities
+    for (int i = 0; i < 5; i++) {
+      output_file_.print(measured_probs[i], 6);
+      if (i < 4) output_file_.print(",");
+    }
+    output_file_.print(",");
+    output_file_.println(mse, 6);
+
+    // Sync every 50 epochs to prevent data loss
+    if (num_compared_ % 50 == 0) {
+      output_file_.sync();
+    }
+  }
+
   // Log periodic summary (every 10 epochs)
   if (num_compared_ % 10 == 0) {
     float agreement = getAgreementPercent();
@@ -212,7 +240,10 @@ float ValidationReader::getMeanMSE() const {
   return total_mse_ / num_compared_;
 }
 
-void ValidationReader::printSummary() const {
+void ValidationReader::printSummary() {
+  // Close prediction log file if open
+  closePredictionLog();
+
   Serial.println();
   Serial.println("========================================");
   Serial.println("VALIDATION SUMMARY");
@@ -238,4 +269,42 @@ void ValidationReader::printSummary() const {
 
   Serial.println("========================================");
   Serial.println();
+}
+
+bool ValidationReader::enablePredictionLogging(const char* output_filename) {
+  if (!sd_ptr_) {
+    Serial.println("ERROR: SD card not initialized for prediction logging");
+    return false;
+  }
+
+  // Close any existing file
+  if (output_file_.isOpen()) {
+    output_file_.close();
+  }
+
+  // Open output file for writing (overwrite if exists)
+  if (!output_file_.open(output_filename, O_WRONLY | O_CREAT | O_TRUNC)) {
+    Serial.print("ERROR: Failed to open output file: ");
+    Serial.println(output_filename);
+    return false;
+  }
+
+  // Write CSV header
+  output_file_.println("Epoch,Teensy_Stage,Reference_Stage,Match,Wake,N1,N2,N3,REM,MSE");
+  output_file_.sync();
+
+  logging_enabled_ = true;
+  Serial.print("Prediction logging enabled: ");
+  Serial.println(output_filename);
+
+  return true;
+}
+
+void ValidationReader::closePredictionLog() {
+  if (logging_enabled_ && output_file_.isOpen()) {
+    output_file_.sync();
+    output_file_.close();
+    logging_enabled_ = false;
+    Serial.println("Prediction log file closed");
+  }
 }
