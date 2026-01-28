@@ -79,6 +79,7 @@ def create_hypnogram(predictions_df):
 
 def plot_session(eeg_data, predictions_df, output_file=None, title="Sleep Session"):
     """Create combined spectrogram + hypnogram plot."""
+    import matplotlib.gridspec as gridspec
 
     # Compute spectrogram
     f, t_spec, Sxx = compute_spectrogram(eeg_data)
@@ -86,13 +87,16 @@ def plot_session(eeg_data, predictions_df, output_file=None, title="Sleep Sessio
     # Get hypnogram data
     t_hyp, stages = create_hypnogram(predictions_df)
 
-    # Create figure with two subplots
-    fig, axes = plt.subplots(2, 1, figsize=(14, 8),
-                              gridspec_kw={'height_ratios': [1, 3]},
-                              sharex=True)
+    # Create figure with GridSpec: 2 rows, 2 cols (main plots + colorbar column)
+    fig = plt.figure(figsize=(14, 7))
+    gs = gridspec.GridSpec(2, 2, height_ratios=[1, 3], width_ratios=[50, 1],
+                           hspace=0.08, wspace=0.02)
+
+    ax_hyp = fig.add_subplot(gs[0, 0])
+    ax_spec = fig.add_subplot(gs[1, 0], sharex=ax_hyp)
+    cax = fig.add_subplot(gs[1, 1])  # Colorbar axes aligned with spectrogram only
 
     # --- Hypnogram (top) ---
-    ax_hyp = axes[0]
 
     # Plot as step function with colored bars
     for i in range(len(stages)):
@@ -128,7 +132,6 @@ def plot_session(eeg_data, predictions_df, output_file=None, title="Sleep Sessio
     ax_hyp.legend(handles=legend_elements, loc='upper right', ncol=5, fontsize=8)
 
     # --- Spectrogram (bottom) ---
-    ax_spec = axes[1]
 
     # Focus on sleep-relevant frequencies (0.5-30 Hz)
     freq_mask = (f >= 0.5) & (f <= 30)
@@ -145,21 +148,18 @@ def plot_session(eeg_data, predictions_df, output_file=None, title="Sleep Sessio
     ax_spec.set_xlabel('Time (seconds)')
     ax_spec.set_ylim(0.5, 30)
 
-    # Add colorbar
-    cbar = fig.colorbar(im, ax=ax_spec, label='Power (dB)')
+    # Set x-axis limits to remove blank space (use max timestamp from data)
+    max_time = max(t_hyp[-1], t_spec[-1])
+    ax_hyp.set_xlim(0, max_time)
+    ax_spec.set_xlim(0, max_time)
 
-    # Add frequency band annotations
+    # Add frequency band annotations (horizontal lines only)
     ax_spec.axhline(y=4, color='white', linestyle='--', alpha=0.5, linewidth=0.5)
     ax_spec.axhline(y=8, color='white', linestyle='--', alpha=0.5, linewidth=0.5)
     ax_spec.axhline(y=12, color='white', linestyle='--', alpha=0.5, linewidth=0.5)
 
-    # Label frequency bands on right side
-    ax_spec2 = ax_spec.twinx()
-    ax_spec2.set_ylim(0.5, 30)
-    ax_spec2.set_yticks([2, 6, 10, 20])
-    ax_spec2.set_yticklabels(['Delta', 'Theta', 'Alpha', 'Beta'], fontsize=8)
-
-    plt.tight_layout()
+    # Add colorbar in dedicated axes (already aligned with spectrogram via GridSpec)
+    cbar = fig.colorbar(im, cax=cax, label='Power (dB)')
 
     if output_file:
         plt.savefig(output_file, dpi=150, bbox_inches='tight')
