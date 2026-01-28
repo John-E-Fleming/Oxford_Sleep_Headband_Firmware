@@ -1,4 +1,5 @@
 #include "MLInference.h"
+#include <new>  // For std::nothrow
 
 // Static objects for TFLite (must persist for lifetime of interpreter)
 namespace {
@@ -79,20 +80,21 @@ bool MLInference::begin(bool use_dummy) {
   micro_op_resolver.AddRelu();
   micro_op_resolver.AddConcatenation();
 
-  // Allocate tensor arena
-  tensor_arena_ = (uint8_t*)extmem_malloc(MODEL_TENSOR_ARENA_SIZE);
+  // Allocate tensor arena - prefer internal RAM for speed (external PSRAM is ~10x slower)
+  // Teensy 4.1 has 512KB internal RAM, 160KB arena should fit
+  tensor_arena_ = new (std::nothrow) uint8_t[MODEL_TENSOR_ARENA_SIZE];
   if (tensor_arena_) {
-    tensor_arena_is_extmem_ = true;
-    Serial.println("Tensor arena allocated in external RAM");
-  } else {
-    Serial.println("Failed to allocate tensor arena in external RAM, trying regular RAM");
-    tensor_arena_ = new uint8_t[MODEL_TENSOR_ARENA_SIZE];
     tensor_arena_is_extmem_ = false;
+    Serial.println("Tensor arena allocated in internal RAM (fast)");
+  } else {
+    Serial.println("Internal RAM full, falling back to external PSRAM (slower)");
+    tensor_arena_ = (uint8_t*)extmem_malloc(MODEL_TENSOR_ARENA_SIZE);
+    tensor_arena_is_extmem_ = true;
     if (!tensor_arena_) {
       Serial.println("Failed to allocate tensor arena");
       return false;
     }
-    Serial.println("Tensor arena allocated in regular RAM");
+    Serial.println("Tensor arena allocated in external PSRAM");
   }
 
   // Build interpreter

@@ -53,7 +53,9 @@ private:
   static const int SAMPLE_RATE = 4000; // Hz
 
   // Buffering system for fast SD card reads
-  static const int BUFFER_SIZE = 16384;  // 16KB buffer = ~455 samples
+  // Larger buffer = fewer SD card operations = faster loading
+  // 128KB buffer = ~3,500 samples = ~0.9 seconds of data per refill
+  static const int BUFFER_SIZE = 131072;  // 128KB buffer
   uint8_t* read_buffer_;                  // Buffer allocated in EXTMEM
   int buffer_position_;                   // Current read position in buffer (bytes)
   int buffer_valid_bytes_;                // Number of valid bytes in buffer

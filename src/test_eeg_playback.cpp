@@ -58,6 +58,10 @@ unsigned long last_sample_time = 0;
 // Statistics and control
 unsigned long sample_count = 0;
 unsigned long inference_count = 0;
+unsigned long last_inference_end_time = 0;  // For timing between inferences
+unsigned long total_read_time_us = 0;       // Cumulative SD read time
+unsigned long total_preprocess_time_us = 0; // Cumulative preprocessing time
+unsigned long samples_since_timing_reset = 0;
 bool enable_inference = true;
 bool enable_serial_plot = !FAST_PLAYBACK;  // Disable plotting in fast mode (printing slows down processing)
 bool enable_quality_check = true;
@@ -173,6 +177,10 @@ void setup() {
       enable_inference = false;
     } else {
       Serial.println("EEG file opened successfully");
+      // Debug: confirm buffer status
+      Serial.print("File reader buffer size: ");
+      Serial.print(131072);  // BUFFER_SIZE from EEGFileReader.h
+      Serial.println(" bytes (128KB)");
     }
   }
   
@@ -274,41 +282,23 @@ void loop() {
     // Read next sample from file - no synthetic data fallback
     bool has_data = false;
     
-    if (sd.exists(config.datafile.c_str())) {
-      has_data = eegReader.readNextSample(eeg_sample);
-      if (!has_data) {
-        Serial.println("End of file reached or read error");
-        Serial.print("Total samples processed: ");
-        Serial.println(sample_count);
+    // File existence already verified at startup - just read directly
+    unsigned long read_start = micros();
+    has_data = eegReader.readNextSample(eeg_sample);
+    total_read_time_us += (micros() - read_start);
+    samples_since_timing_reset++;
+    if (!has_data) {
+      Serial.println("End of file reached or read error");
+      Serial.print("Total samples processed: ");
+      Serial.println(sample_count);
 
-        // Print validation summary if enabled
+      // Print validation summary if enabled
 #ifdef ENABLE_VALIDATION_MODE
-        if (validationReader.isLoaded()) {
-          validationReader.printSummary();
-        }
+      if (validationReader.isLoaded()) {
+        validationReader.printSummary();
+      }
 #endif
 
-        while(1); // Stop execution
-      }
-    } else {
-      Serial.print("ERROR: EEG file '");
-      Serial.print(config.datafile);
-      Serial.println("' not found on SD card");
-      Serial.println("Available files:");
-      // List files on SD card for debugging
-      SdFile root;
-      if (root.open("/")) {
-        while (true) {
-          SdFile entry;
-          if (!entry.openNext(&root, O_RDONLY)) break;
-          char name[64];
-          entry.getName(name, sizeof(name));
-          Serial.print("  ");
-          Serial.println(name);
-          entry.close();
-        }
-        root.close();
-      }
       while(1); // Stop execution
     }
     
@@ -334,7 +324,9 @@ void loop() {
 
       // Process through complete pipeline: 4000Hz -> 250Hz -> BP filter -> 100Hz
       float output_100hz;
+      unsigned long preprocess_start = micros();
       bool sample_ready = preprocessingPipeline.processSample(bipolar_sample, output_100hz);
+      total_preprocess_time_us += (micros() - preprocess_start);
 
       // DEBUG: Log first 20 samples at 100Hz (disabled for speed)
       // static int logged_100hz_count = 0;
@@ -398,13 +390,44 @@ void loop() {
               //   }
               // }
 
+              // Timing: measure data loading time (time since last inference ended)
+              if (last_inference_end_time > 0) {
+                unsigned long data_load_time_ms = (micros() - last_inference_end_time) / 1000;
+                Serial.print("[TIMING] Data loading took ");
+                Serial.print(data_load_time_ms);
+                Serial.print(" ms (");
+                Serial.print(samples_since_timing_reset);
+                Serial.println(" samples)");
+
+                // Breakdown of time spent
+                Serial.print("[TIMING]   SD read: ");
+                Serial.print(total_read_time_us / 1000);
+                Serial.print(" ms, Preprocess: ");
+                Serial.print(total_preprocess_time_us / 1000);
+                Serial.print(" ms, Other: ");
+                Serial.print(data_load_time_ms - (total_read_time_us + total_preprocess_time_us) / 1000);
+                Serial.println(" ms");
+
+                // Reset counters
+                total_read_time_us = 0;
+                total_preprocess_time_us = 0;
+                samples_since_timing_reset = 0;
+              }
+
+              unsigned long inference_start = micros();
               if (mlInference.predict(processed_window, ml_output, inference_count)) {
+                unsigned long inference_time_ms = (micros() - inference_start) / 1000;
+                Serial.print("[TIMING] Inference took ");
+                Serial.print(inference_time_ms);
+                Serial.println(" ms");
+                last_inference_end_time = micros();  // Mark when inference finished
+
                 SleepStage predicted_stage = mlInference.getPredictedStage(ml_output);
 
                 // === CHECKPOINT DEBUG: Output statistics for first N epochs ===
                 // Format designed for tools/compare_teensy_python.py
                 // Set CHECKPOINT_DEBUG_EPOCHS to 0 to disable
-                #define CHECKPOINT_DEBUG_EPOCHS 5
+                #define CHECKPOINT_DEBUG_EPOCHS 5  // Enable for first 5 epochs
                 if (inference_count < CHECKPOINT_DEBUG_EPOCHS) {
 
                   // CHECKPOINT A: 100Hz preprocessed signal (before normalization)

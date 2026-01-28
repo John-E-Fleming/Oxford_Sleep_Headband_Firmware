@@ -50,6 +50,20 @@ bool PreprocessingPipeline::processSample(float input_4000hz, float& output_100h
   // We collect 5 samples at 250Hz and output 2 samples at 100Hz
   // This gives us exactly 100Hz: 5 samples / 250 Hz = 0.02 seconds = 2 samples / 100 Hz
 
+  // If we're waiting to output the second sample, do that first before adding new data
+  if (output_phase_ == 1) {
+    // Second output: interpolate at position 2.5
+    // This is halfway between sample 2 and sample 3 (0-indexed)
+    output_100hz = (resample_buffer_[2] + resample_buffer_[3]) * 0.5f;
+
+    // Reset buffer and add the new sample as first element
+    resample_buffer_[0] = filtered_250hz;
+    resample_count_ = 1;
+    output_phase_ = 0;
+    return true;  // Output second of two samples
+  }
+
+  // Add new sample to buffer
   resample_buffer_[resample_count_] = filtered_250hz;
   resample_count_++;
 
@@ -58,23 +72,8 @@ bool PreprocessingPipeline::processSample(float input_4000hz, float& output_100h
     return false;  // Need more samples
   }
 
-  // Use linear interpolation to generate 2 output samples from 5 input samples
-  // Output sample 0 is at position 0.0 (first input sample)
-  // Output sample 1 is at position 2.5 (between 2nd and 3rd input sample)
-
-  if (output_phase_ == 0) {
-    // First output: use first sample directly (position 0.0)
-    output_100hz = resample_buffer_[0];
-    output_phase_ = 1;
-    return true;  // Output first of two samples
-  } else {
-    // Second output: interpolate at position 2.5
-    // This is halfway between sample 2 and sample 3 (0-indexed)
-    output_100hz = (resample_buffer_[2] + resample_buffer_[3]) * 0.5f;
-
-    // Reset for next group of 5 samples
-    resample_count_ = 0;
-    output_phase_ = 0;
-    return true;  // Output second of two samples
-  }
+  // First output: use first sample directly (position 0.0)
+  output_100hz = resample_buffer_[0];
+  output_phase_ = 1;
+  return true;  // Output first of two samples
 }

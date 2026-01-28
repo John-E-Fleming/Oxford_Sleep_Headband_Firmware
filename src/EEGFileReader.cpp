@@ -208,12 +208,14 @@ bool EEGFileReader::refillBuffer() {
     return false;  // End of file
   }
 
-  // CRITICAL FIX: Seek to current_position_ before reading to handle buffer alignment
-  // The file cursor may be ahead of current_position_ if the previous buffer had
-  // leftover bytes that weren't a complete sample.
-  if (!file_.seek(current_position_)) {
-    Serial.println("ERROR: Failed to seek in refillBuffer");
-    return false;
+  // Seek only if file position doesn't match expected position
+  // (This handles any misalignment while avoiding unnecessary seeks)
+  uint32_t file_pos = file_.curPosition();
+  if (file_pos != current_position_) {
+    if (!file_.seek(current_position_)) {
+      Serial.println("ERROR: Failed to seek in refillBuffer");
+      return false;
+    }
   }
 
   // Read as much as possible (up to BUFFER_SIZE)
