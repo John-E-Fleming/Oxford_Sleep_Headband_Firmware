@@ -1,0 +1,88 @@
+--- Terminal on COM4 | 115200 8-N-1
+--- Available filters and text transformations: colorize, debug, default, direct, hexlify, log2file, nocontrol, printable, send_on_enter, time
+--- More details at https://bit.ly/pio-monitor-filters
+--- Quit: Ctrl+C | Menu: Ctrl+T | Help: Ctrl+T followed by Ctrl+H
+=== EEG File Playback Test ===
+Commands:
+  p - Toggle serial plotting
+  i - Toggle ML inference
+  s - Show statistics
+  q - Toggle quality checking
+  l - Toggle inference logging
+  d - Toggle debug logging (CSV output)
+  x - Export log to SD card
+  r - Restart playback
+
+Initializing SD card...
+SD initialized with SdioConfig(FIFO_SDIO)
+SD card initialized
+Loading configuration...
+Configuration loaded successfully:
+  Datafile: data/SdioLogger_miklos_night_2.bin
+  Sample rate: 4000 Hz (NOTE: should be 4000Hz for new preprocessing pipeline)
+  Bipolar channels: 0 - 6
+  Playback mode: FAST (processing as quickly as possible)
+Opening EEG file...
+SUCCESS: Opened EEG file: data/SdioLogger_miklos_night_2.bin
+File size: 4147200000 bytes
+Channels: 9, Bytes per sample: 36
+Total samples: 115200000
+Estimated duration: 28800.0 seconds
+EEG file opened successfully
+EEG Processor initialized
+Window size: 30 seconds
+Inference interval: 5 seconds
+Sliding window configured: 30s window, 30s interval (0.00% overlap)
+Streaming inference logger initialized: /inference_logs/1000
+DebugLogger: Initialized
+Debug logger ready (use 'd' to enable)
+Debug output filename set to: data/SdioLogger_miklos_night_2_model_predictions.csv
+Sliding window: 30s window with 30s slide (0.0% overlap)
+Initializing ML inference...
+ML Inference: Initializing TensorFlow Lite Micro...
+Model size: 55304 bytes
+Tensor arena allocated in external RAM
+Input tensor 0 (EEG): 3000 elements (FLOAT32), shape: 1x1x3000x1
+Input tensor 1 (Epoch): 1 elements (FLOAT32), shape: 1x1
+Output tensor: 5 elements (FLOAT32)
+TensorFlow Lite Micro initialized successfully
+ML inference ready (real model)
+
+=== VALIDATION MODE ENABLED ===
+Loading reference predictions from: data/reference_predictions.csv
+Loaded 960 reference predictions
+Validation ready with 960 reference predictions
+===============================
+
+Starting EEG playback...
+[BUFFER] Refilling buffer #0 - reading 16384 bytes
+[BUFFER] Refilling buffer #1 - reading 16384 bytes
+[BUFFER] Refilling buffer #2 - reading 16384 bytes
+[BUFFER] Refilling buffer #3 - reading 16384 bytes
+[BUFFER] Refilling buffer #4 - reading 16384 bytes
+First inference window ready
+=== Model Output (dequantized) ===
+Output[0] = 0.554688
+Output[1] = 0.000000
+Output[2] = 0.000000
+Output[3] = 0.441406
+Output[4] = 0.000000
+=== Model Output (dequantized) ===
+Output[0] = 0.488281
+Output[1] = 0.023438
+Output[2] = 0.000000
+Output[3] = 0.097656
+Output[4] = 0.386719
+=== Model Output (dequantized) ===
+Output[0] = 0.644531
+Output[1] = 0.023438
+Output[2] = 0.000000
+Output[3] = 0.164063
+Output[4] = 0.164063
+--- Terminal on COM4 | 115200 8-N-1
+--- Available filters and text transformations: colorize, debug, default, direct, hexlify, log2file, nocontrol, printable, send_on_enter, time
+--- More details at https://bit.ly/pio-monitor-filters
+--- Quit: Ctrl+C | Menu: Ctrl+T | Help: Ctrl+T followed by Ctrl+H
+MISMATCH Epoch 17: Teensy=REM, Reference=Wake | MSE=0.038394
+MISMATCH Epoch 19: Teensy=REM, Reference=Wake | MSE=0.117352
+Epoch 19 | Agreement: 14/20 (70.0%) | Mean MSE: 0.078776

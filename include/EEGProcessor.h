@@ -85,6 +85,15 @@ public:
   float getFilteredMean() const { return filtered_mean_; }
   float getFilteredStd() const { return filtered_std_; }
 
+  // Debug: Get raw (non-normalized) sample from buffer by index
+  float getRawBufferSample(int index) const {
+    if (index < 0 || index >= (int)filtered_buffer_.size()) return 0.0f;
+    return filtered_buffer_[index];
+  }
+
+  // Debug: Get buffer size
+  int getBufferSize() const { return filtered_buffer_.size(); }
+
 private:
   // Circular buffer for multi-channel raw data (legacy)
   CircularBuffer<float, 100> sample_buffer_;  // Minimal size: ~400 bytes for floats

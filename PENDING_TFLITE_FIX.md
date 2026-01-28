@@ -1,233 +1,245 @@
-# TensorFlow Lite Library Version Fix - In Progress
+# Preprocessing Pipeline Validation Status
 
-**Status**: Windows long paths enabled, requires restart to complete fix
-
-**Date**: 2025-11-05
+**Last Updated**: 2026-01-28
 
 ---
 
-## Issue Summary
+## Current Status: Ready for Teensy Validation
 
-The firmware is currently using the **wrong TensorFlow Lite library version**, causing prediction mismatches with the Python reference implementation.
+### Summary
 
-**Root Cause**:
-- Colleague generated `.tflite` model using: `tensorflow/tflite-micro-arduino-examples` commit `2be8092d9f167b1473f072ff5794364819df8b52`
-- Firmware currently uses: `spaziochirale/Chirale_TensorFLowLite@^2.0.0` (different version)
-- **Same model file + different TFLite runtime = different predictions**
+Our normalization and TFLite inference code is **correct** (100% agreement when using reference preprocessed data). However, our preprocessing pipeline from raw 4kHz data produces **83% agreement** with reference predictions due to differences in how the data was originally preprocessed for model training.
 
-**Why This Matters**:
-- Python validation notebook shows 94.1% agreement (using correct library)
-- Firmware predictions won't match reference predictions until we use the correct library
-- Validation mode will show low agreement percentage with wrong library
+**Best Method Found:** "Every 16th sample" downsampling achieves **86.8% agreement** - the highest of all methods tested (including 500Hz intermediate sampling).
+
+### Next Step
+Run validation on Teensy hardware to confirm Python results translate to firmware performance. Expected: ~86-87% agreement with "every 16th sample" method, or ~83% with current averaging method.
 
 ---
 
-## What Has Been Done
+## Phase 1 Results: Python Prediction Agreement
 
-### 1. Windows Long Path Support Enabled ✓
+### Test 1: Using Reference Preprocessed EEG
+```bash
+python tools/test_prediction_agreement.py
+```
+**Result**: **100% agreement** (960/960 epochs match)
 
-The Windows registry has been updated to support long file paths:
+This confirms:
+- Z-score normalization is correct
+- TFLite inference code is correct
+- Model loading and FLOAT32 input handling is correct
 
-```powershell
-# Already executed successfully
-New-ItemProperty -Path "HKLM:\SYSTEM\CurrentControlSet\Control\FileSystem" `
-                 -Name "LongPathsEnabled" -Value 1 -PropertyType DWORD -Force
+### Test 2: Using Raw 4kHz Data with Our Preprocessing
+**Result**: **83% agreement** (799/960 epochs match)
+
+---
+
+## Root Cause Analysis
+
+### Data Source Investigation
+
+| File | Correlation with Reference | Notes |
+|------|---------------------------|-------|
+| 4kHz SdioLogger file | **0.99** | Reference was created from this |
+| 250Hz file | 0.31 | Different processing, NOT the source |
+
+### Preprocessing Pipeline Comparison
+
+**Our current method:**
+```
+4kHz raw data
+    ↓ (average every 16 samples)
+250Hz downsampled
+    ↓ (Butterworth bandpass 0.5-30Hz)
+250Hz filtered
+    ↓ (scipy.signal.resample)
+100Hz output
 ```
 
-Output confirmed:
+**Reference method (unknown exact implementation):**
 ```
-LongPathsEnabled : 1
-PSPath           : Microsoft.PowerShell.Core\Registry::HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Control\FileSystem
+4kHz raw data
+    ↓ (unknown downsampling - possibly with anti-aliasing filter)
+250Hz downsampled
+    ↓ (Butterworth bandpass 0.5-30Hz)
+250Hz filtered
+    ↓ (scipy.signal.resample)
+100Hz output
 ```
 
-### 2. Git Long Paths Enabled ✓
+### Per-Class Accuracy Breakdown
+
+| Sleep Stage | Reference Count | Our Correct | Accuracy |
+|-------------|-----------------|-------------|----------|
+| Wake        | 413             | 274         | **66.3%** |
+| N1          | 11              | 8           | 72.7%    |
+| N2          | 226             | 219         | **96.9%** |
+| N3          | 276             | 274         | **99.3%** |
+| REM         | 34              | 24          | 70.6%    |
+
+### Confusion Matrix (Reference → Our Prediction)
+
+```
+        Wake    N1      N2      N3      REM
+Wake     274     10      98       7      24
+N1         0      8       1       0       2
+N2         0      0     219       7       0
+N3         0      0       2     274       0
+REM        0      1       8       1      24
+```
+
+### Key Insight
+
+**Most errors are Wake → N2 (98 epochs, 61% of all errors)**
+
+The subtle differences in downsampling create small signal variations that primarily affect Wake/light sleep discrimination. Deep sleep detection (N2/N3) remains highly accurate (97-99%).
+
+---
+
+## Alternative Downsampling Methods Tested
+
+### Methods Tested
+
+| Method | Correlation | Agreement | Notes |
+|--------|-------------|-----------|-------|
+| Simple averaging (current) | 0.9898 | **83.2%** | Current Teensy implementation |
+| scipy.signal.decimate (FIR) | 0.9868 | 82.4% | Worse |
+| scipy.signal.decimate (IIR) | 0.9894 | 83.0% | Similar |
+| Filter at 4kHz first | nan | 43.0% | Unstable |
+| Zero-phase filter (filtfilt) | -0.19 | 78.0% | Much worse |
+| Lower filter order (3) | 0.5729 | 82.4% | Worse |
+| **Every 16th sample** | 0.9889 | **86.8%** | **Best result!** |
+
+### Best Result: Every 16th Sample (Simple Decimation)
+
+Taking every 16th sample instead of averaging improves overall accuracy:
+
+| Method | Overall | Wake | N1 | N2 | N3 | REM |
+|--------|---------|------|----|----|----|----|
+| Averaging | 83.2% | 66.3% | 72.7% | 96.9% | 99.3% | 70.6% |
+| Every 16th | **86.8%** | **77.2%** | 54.5% | 94.7% | 98.6% | 64.7% |
+
+**Tradeoff Analysis:**
+- Wake detection: +11% improvement (main benefit)
+- N1 detection: -18% (worse, but only 11 samples)
+- N2/N3: Slight decrease but still excellent (>94%)
+- REM: -6% (worse)
+
+**Recommendation**: If Wake detection is important for your use case, switch to "every 16th sample" downsampling. This is also simpler to implement on Teensy (just skip samples instead of averaging).
+
+---
+
+## 500Hz Intermediate Sampling Frequency Tests
+
+We tested whether using 500Hz as an intermediate sampling frequency (matching a colleague's original implementation) would improve agreement.
+
+### Pipeline Variations Tested
+
+| Method | Description | Agreement |
+|--------|-------------|-----------|
+| Method A | 4kHz -> 500Hz (avg 8) -> filter -> 100Hz (avg 5) | 78.5% |
+| Method B | 4kHz -> 500Hz (every 8th) -> filter -> 100Hz (avg 5) | 80.7% |
+| Method C | 4kHz -> 500Hz (every 8th) -> filter -> 100Hz (every 5th) | **83.6%** |
+| Method D | 4kHz -> 500Hz (avg 8) -> filter -> 100Hz (every 5th) | 82.2% |
+| Method E | 4kHz -> 500Hz (avg 8) -> filter -> 100Hz (resample) | 82.5% |
+
+### 500Hz vs 250Hz Comparison
+
+| Method | Agreement | Wake | N2 | N3 |
+|--------|-----------|------|----|----|
+| 250Hz averaging (current) | 83.2% | 66% | 97% | 99% |
+| 500Hz Method C (best 500Hz) | 83.6% | 69% | 96% | 99% |
+| **250Hz every 16th (best overall)** | **86.8%** | **77%** | 95% | 99% |
+
+### Conclusion
+
+The 500Hz intermediate sampling frequency does **NOT** improve over the best 250Hz method. The "every 16th sample" approach at 250Hz remains the best method found with 86.8% agreement.
+
+---
+
+## Model Input Specification
+
+**Important**: The model uses **FLOAT32** inputs, not INT8 quantized.
+
+| Input | Shape | Type | Quantization |
+|-------|-------|------|--------------|
+| EEG data | [1, 1, 3000, 1] | float32 | None (scale=0.0) |
+| Epoch index | [1, 1] | float32 | None (scale=0.0) |
+| Output | [1, 5] | float32 | None |
+
+Normalized float values are passed directly to the model without any INT8 conversion.
+
+---
+
+## Files and Tools
+
+| File | Purpose |
+|------|---------|
+| `tools/test_prediction_agreement.py` | Phase 1: Python vs reference prediction test |
+| `tools/compare_teensy_python.py` | Phase 2: Teensy vs Python checkpoint comparison |
+| `tools/compare_preprocessing.py` | Original preprocessing comparison tool |
+| `src/test_eeg_playback.cpp` | Teensy playback with checkpoint debug output |
+| `src/PreprocessingPipeline.cpp` | Current Teensy preprocessing (simple averaging) |
+
+---
+
+## Quick Reference Commands
 
 ```bash
-git config --global core.longpaths true
-```
+# Run Python prediction agreement test
+python tools/test_prediction_agreement.py
 
-### 3. Case-Insensitive Stage Comparison Fixed ✓
-
-Updated `src/ValidationReader.cpp` line 146 to use `strcasecmp()` instead of `strcmp()` to handle "WAKE" vs "Wake" case differences.
-
----
-
-## What Needs to Be Done After Restart
-
-### Step 1: Restart Computer (REQUIRED)
-
-The Windows long path setting requires a restart to take full effect for PlatformIO's Python process.
-
-### Step 2: Update platformio.ini
-
-After restart, update `platformio.ini` to use the correct TensorFlow Lite library:
-
-**Current (wrong) library**:
-```ini
-lib_deps =
-	wizard97/RingBuf@^2.0.1
-	arduino-libraries/SD@^1.3.0
-	spaziochirale/Chirale_TensorFLowLite@^2.0.0
-```
-
-**Change to (correct) library**:
-```ini
-lib_deps =
-	wizard97/RingBuf@^2.0.1
-	arduino-libraries/SD@^1.3.0
-	https://github.com/tensorflow/tflite-micro-arduino-examples.git#2be8092d9f167b1473f072ff5794364819df8b52
-```
-
-### Step 3: Clean and Rebuild
-
-```bash
-pio run --target clean
-pio run
-```
-
-This should now succeed with long paths enabled after restart.
-
-### Step 4: Upload and Test
-
-```bash
-pio run --target upload
-```
-
-Then open serial monitor to see validation results. Expected outcome: **~94.1% agreement** matching Python validation.
-
----
-
-## Why Installation Failed Before Restart
-
-**Error Encountered**:
-```
-shutil.Error: [('path/to/file', 'path/to/destination', '[Errno 22] Invalid argument')]
-```
-
-**Reason**: PlatformIO's Python process (`shutil.copytree`) doesn't respect the long path registry setting until the system is restarted. Even though the setting was enabled, running processes still use the old 260-character limit.
-
-**File Paths Causing Issues**:
-```
-C:\Users\ndcm1133\OneDrive - Nexus365\Desktop\Oxford_Sleep_Headband\sleep_headband_firmware\
-.pio\libdeps\teensy41\Arduino_TensorFlowLite\...
-```
-
-Base path is already 105 characters, and TFLite library has deep directory structures that exceed Windows' 260-character default limit.
-
----
-
-## Alternative Fix (If Restart Doesn't Work)
-
-If the build still fails after restart, you can move the project to a shorter path:
-
-**From**:
-```
-C:\Users\ndcm1133\OneDrive - Nexus365\Desktop\Oxford_Sleep_Headband\sleep_headband_firmware
-```
-
-**To**:
-```
-C:\Projects\sleep_firmware
-```
-
-Then repeat Steps 2-4 above.
-
----
-
-## Verification Steps
-
-After successfully installing the correct library and uploading:
-
-1. **Check Library Version**:
-   Build output should show:
-   ```
-   Library Manager: Installing git+https://github.com/tensorflow/tflite-micro-arduino-examples.git#2be8092d9f167b1473f072ff5794364819df8b52
-   ```
-
-2. **Validation Results**:
-   Serial monitor should show:
-   ```
-   === VALIDATION MODE ENABLED ===
-   Validation ready with 960 reference predictions
-   ===============================
-   ```
-
-3. **Expected Agreement**:
-   Final summary should show ~94.1% agreement:
-   ```
-   ========================================
-   VALIDATION SUMMARY
-   ========================================
-   Total epochs compared: 960
-   Exact stage matches: 903/960 (94.1%)
-   Mean probability MSE: 0.002145
-   ========================================
-   ```
-
----
-
-## Current Configuration
-
-**Validation Mode**: ✓ ENABLED
-- `platformio.ini` line 29: `-DENABLE_VALIDATION_MODE`
-
-**SD Card Files** (correct structure):
-```
-SD Card Root:
-├── config.txt
-├── data/
-│   ├── SdioLogger_miklos_night_2.bin
-│   └── reference_predictions.csv (960 epochs)
-```
-
-**ValidationReader Changes**: ✓ Applied
-- Case-insensitive comparison implemented
-- Memory allocation optimized (using `extmem_malloc` in `begin()`)
-
----
-
-## Quick Start After Restart
-
-```bash
-# 1. Edit platformio.ini (change to correct TFLite library URL)
-# 2. Clean build
-pio run --target clean
-
-# 3. Build with correct library (should work after restart)
-pio run
-
-# 4. Upload
+# Build and upload Teensy firmware
 pio run --target upload
 
-# 5. Monitor validation results
-# Open serial monitor in VS Code or:
-pio device monitor
+# Monitor Teensy serial output
+pio device monitor --baud 115200
+
+# Compare Teensy checkpoints with Python
+python tools/compare_teensy_python.py teensy_debug.txt
 ```
 
-Look for:
-- "Loaded 960 reference predictions"
-- Periodic "Agreement: X/Y (Z%)" updates every 10 epochs
-- Final validation summary with ~94.1% agreement
-
 ---
 
-## Related Files
+## Decision Points
 
-- `platformio.ini` - Line 18: Library dependency to change
-- `platformio.ini` - Line 29: Validation mode flag (already enabled)
-- `src/ValidationReader.cpp` - Validation comparison logic
-- `include/ValidationReader.h` - Validation class definition
-- `VALIDATION_MODE_GUIDE.md` - Full validation mode documentation
-- `data/reference_predictions.csv` - Python reference predictions (on SD card)
+### Option A: Keep Simple Averaging (83.2% agreement)
+- Current Teensy implementation
+- Excellent deep sleep detection (N2: 97%, N3: 99%)
+- Wake detection at 66%
+- No code changes needed
 
----
+### Option B: Switch to Every 16th Sample (86.8% agreement)
+- Better overall accuracy (+3.6%)
+- Much better Wake detection (77% vs 66%)
+- Slightly worse sleep stage detection (still >94% for N2/N3)
+- **Simpler to implement** - just skip samples instead of averaging
+- Teensy change: In `PreprocessingPipeline.cpp`, change from averaging to decimation
 
-## Contact/Notes
+### Recommendation
+If Wake detection matters for your application (e.g., detecting when user falls asleep), switch to "every 16th sample". The implementation is actually simpler and gives better results.
 
-If agreement is still low after installing correct library:
-1. Verify SD card files are correct
-2. Check that model file (`include/model.h`) matches colleague's version
-3. Review filter coefficients (should be using `TrainingBandpassFilter`)
-4. Compare first few epoch predictions manually
+### Code Change Required (if switching to every 16th sample)
+In `src/PreprocessingPipeline.cpp`, change the downsampling logic:
 
-The Python validation notebook already showed 94.1% agreement, so firmware should match once the correct TFLite library is installed.
+```cpp
+// CURRENT: Average every 16 samples
+// for (int i = 0; i < 16; i++) {
+//   sum_250hz += downsample_250hz_buffer_[i];
+// }
+// float sample_250hz = sum_250hz / 16.0f;
+
+// NEW: Take every 16th sample (simpler and better accuracy)
+float sample_250hz = downsample_250hz_buffer_[0];  // Just use first sample
+```
+
+### Alternative approaches (if needed):
+- Ask colleague for exact preprocessing code used for reference data
+- Retrain model using data preprocessed with our method
+
+### Methods Ruled Out
+- **500Hz intermediate sampling**: Tested 5 variations, best was 83.6% (worse than every 16th at 86.8%)
+- **scipy.signal.decimate**: Both FIR and IIR variants performed worse
+- **Zero-phase filtering (filtfilt)**: Much worse at 78%
+- **Filtering at 4kHz first**: Unstable, 43% agreement

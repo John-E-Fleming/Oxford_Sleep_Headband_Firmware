@@ -251,10 +251,13 @@ bool MLInference::predict(float* input_data, float* output_data, int epoch_index
       input_tensor_->data.f[i] = input_data[i];
     }
   } else if (input_type_ == kTfLiteInt8) {
-    // INT8 quantized model - quantize data
+    // INT8 quantized model - quantize data with proper clamping
     for (int i = 0; i < MODEL_EEG_SAMPLES; i++) {
-      int8_t x_quantized = input_data[i] / input_tensor_->params.scale + input_tensor_->params.zero_point;
-      input_tensor_->data.int8[i] = x_quantized;
+      float scaled = input_data[i] / input_tensor_->params.scale + input_tensor_->params.zero_point;
+      // Clamp to int8 range [-128, 127]
+      if (scaled > 127.0f) scaled = 127.0f;
+      if (scaled < -128.0f) scaled = -128.0f;
+      input_tensor_->data.int8[i] = static_cast<int8_t>(scaled);
     }
   } else {
     Serial.println("ERROR: Unsupported input tensor type");
@@ -262,14 +265,19 @@ bool MLInference::predict(float* input_data, float* output_data, int epoch_index
   }
 
   // Populate Input Tensor 1: Epoch index (shape: 1, 1)
-  float f_epoch = (float)epoch_index;
+  // IMPORTANT: Training script uses pos_var_v2() which divides epoch by 1000
+  // So epoch 0 → 0.0, epoch 1 → 0.001, epoch 100 → 0.1, etc.
+  float f_epoch = (float)epoch_index / 1000.0f;
   if (input_epoch_type_ == kTfLiteFloat32) {
     // FLOAT32 - copy directly
     input_tensor_epoch_->data.f[0] = f_epoch;
   } else if (input_epoch_type_ == kTfLiteInt8) {
-    // INT8 - quantize
-    int8_t epoch_quantized = f_epoch / input_tensor_epoch_->params.scale + input_tensor_epoch_->params.zero_point;
-    input_tensor_epoch_->data.int8[0] = epoch_quantized;
+    // INT8 - quantize with proper clamping
+    float scaled = f_epoch / input_tensor_epoch_->params.scale + input_tensor_epoch_->params.zero_point;
+    // Clamp to int8 range [-128, 127]
+    if (scaled > 127.0f) scaled = 127.0f;
+    if (scaled < -128.0f) scaled = -128.0f;
+    input_tensor_epoch_->data.int8[0] = static_cast<int8_t>(scaled);
   } else {
     Serial.println("ERROR: Unsupported epoch tensor type");
     return false;
@@ -299,9 +307,9 @@ bool MLInference::predict(float* input_data, float* output_data, int epoch_index
     return false;
   }
 
-  // Debug output for first few inferences
+  // Debug output for first few inferences (disabled for speed)
   static int debug_count = 0;
-  if (debug_count < 3) {
+  if (debug_count < 0) {  // Changed from 3 to 0 to disable debug output
     Serial.println("=== Model Output (dequantized) ===");
     for (int i = 0; i < MODEL_OUTPUT_SIZE; i++) {
       Serial.print("Output[");

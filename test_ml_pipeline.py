@@ -263,25 +263,54 @@ def test_inference(ref_data, num_epochs=10):
         # Get reference normalized epoch
         ref_epoch = ref_normalized[epoch_idx]
 
-        # Prepare input (3000 samples + epoch index)
-        input_data = np.zeros(MODEL_INPUT_SIZE, dtype=np.float32)
-        input_data[:MODEL_EEG_SAMPLES] = ref_epoch
-        input_data[MODEL_EEG_SAMPLES] = float(epoch_idx)
+        # IMPORTANT: Model has TWO separate inputs:
+        # Input 0: EEG data (shape 1,1,3000,1)
+        # Input 1: Epoch index (shape 1,1) - scaled by /1000 per pos_var_v2() in training script
+
+        # Epoch index scaled to match training script: pos_var_v2() returns epoch/1000
+        epoch_scaled = float(epoch_idx) / 1000.0
+
+        # Check if model has two inputs (dual-input architecture)
+        has_dual_input = len(input_details) >= 2
 
         if is_quantized:
-            # Quantize input
-            input_quantized = np.clip(
-                np.round(input_data / input_scale + input_zero_point),
+            # Quantize EEG input
+            eeg_quantized = np.clip(
+                np.round(ref_epoch / input_scale + input_zero_point),
                 -128, 127
             ).astype(np.int8)
-            interpreter.set_tensor(input_details[0]['index'], input_quantized.reshape(1, -1))
+
+            # Determine correct shape for input tensor
+            eeg_shape = input_details[0]['shape']
+            interpreter.set_tensor(input_details[0]['index'], eeg_quantized.reshape(eeg_shape))
+
+            # Set epoch index input (input 1) if dual-input model
+            if has_dual_input:
+                epoch_scale = input_details[1]['quantization'][0]
+                epoch_zero_point = input_details[1]['quantization'][1]
+                if epoch_scale != 0.0:
+                    epoch_quantized = np.clip(
+                        np.round(epoch_scaled / epoch_scale + epoch_zero_point),
+                        -128, 127
+                    ).astype(np.int8)
+                else:
+                    epoch_quantized = np.array([epoch_scaled], dtype=np.float32)
+                epoch_shape = input_details[1]['shape']
+                interpreter.set_tensor(input_details[1]['index'], epoch_quantized.reshape(epoch_shape))
         else:
-            # Model expects float32 input directly
-            if input_details[0]['shape'].tolist() == [1, 1, 3000, 1]:
+            # Float32 model - set EEG data
+            eeg_shape = input_details[0]['shape']
+            if list(eeg_shape) == [1, 1, 3000, 1]:
                 eeg_input = ref_epoch.reshape(1, 1, 3000, 1).astype(np.float32)
-                interpreter.set_tensor(input_details[0]['index'], eeg_input)
             else:
-                interpreter.set_tensor(input_details[0]['index'], input_data.reshape(1, -1))
+                eeg_input = ref_epoch.reshape(eeg_shape).astype(np.float32)
+            interpreter.set_tensor(input_details[0]['index'], eeg_input)
+
+            # Set epoch index input (input 1) if dual-input model
+            if has_dual_input:
+                epoch_shape = input_details[1]['shape']
+                epoch_input = np.array([epoch_scaled], dtype=np.float32).reshape(epoch_shape)
+                interpreter.set_tensor(input_details[1]['index'], epoch_input)
 
         # Run inference
         interpreter.invoke()

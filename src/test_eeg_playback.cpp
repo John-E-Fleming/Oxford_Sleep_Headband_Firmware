@@ -319,9 +319,30 @@ void loop() {
       // Create bipolar derivation (CH0 - CH6) for ML processing
       float bipolar_sample = eeg_sample[config.bipolar_channel_positive] - eeg_sample[config.bipolar_channel_negative];
 
-      // Process through complete pipeline: 4000Hz → 500Hz → BP filter → Notch → 100Hz
+      // DEBUG: Log first 20 raw bipolar samples at 4kHz (disabled for speed)
+      // static bool logged_first_samples = false;
+      // if (!logged_first_samples && sample_count <= 20) {
+      //   Serial.print("[RAW 4kHz] Sample "); Serial.print(sample_count);
+      //   Serial.print(": bipolar="); Serial.print(bipolar_sample, 2);
+      //   Serial.print(" (CH"); Serial.print(config.bipolar_channel_positive);
+      //   Serial.print("="); Serial.print(eeg_sample[config.bipolar_channel_positive], 2);
+      //   Serial.print(" - CH"); Serial.print(config.bipolar_channel_negative);
+      //   Serial.print("="); Serial.print(eeg_sample[config.bipolar_channel_negative], 2);
+      //   Serial.println(")");
+      //   if (sample_count == 20) logged_first_samples = true;
+      // }
+
+      // Process through complete pipeline: 4000Hz -> 250Hz -> BP filter -> 100Hz
       float output_100hz;
       bool sample_ready = preprocessingPipeline.processSample(bipolar_sample, output_100hz);
+
+      // DEBUG: Log first 20 samples at 100Hz (disabled for speed)
+      // static int logged_100hz_count = 0;
+      // if (sample_ready && logged_100hz_count < 20) {
+      //   Serial.print("[100Hz] Sample "); Serial.print(logged_100hz_count);
+      //   Serial.print(": "); Serial.println(output_100hz, 4);
+      //   logged_100hz_count++;
+      // }
 
       if (sample_ready) {
         // New 100Hz sample is ready after full preprocessing
@@ -379,6 +400,108 @@ void loop() {
 
               if (mlInference.predict(processed_window, ml_output, inference_count)) {
                 SleepStage predicted_stage = mlInference.getPredictedStage(ml_output);
+
+                // === CHECKPOINT DEBUG: Output statistics for first N epochs ===
+                // Format designed for tools/compare_teensy_python.py
+                // Set CHECKPOINT_DEBUG_EPOCHS to 0 to disable
+                #define CHECKPOINT_DEBUG_EPOCHS 5
+                if (inference_count < CHECKPOINT_DEBUG_EPOCHS) {
+
+                  // CHECKPOINT A: 100Hz preprocessed signal (before normalization)
+                  if (debug_buffer_full) {
+                    float pre_sum = 0, pre_sum_sq = 0;
+                    float pre_min = 1e10f, pre_max = -1e10f;
+                    float first_10[10], last_10[10];
+
+                    for (int i = 0; i < 3000; i++) {
+                      int buf_idx = (debug_100hz_index + i) % DEBUG_BUFFER_SIZE;
+                      float val = debug_100hz_buffer[buf_idx];
+                      pre_sum += val;
+                      pre_sum_sq += val * val;
+                      if (val < pre_min) pre_min = val;
+                      if (val > pre_max) pre_max = val;
+                      if (i < 10) first_10[i] = val;
+                      if (i >= 2990) last_10[i - 2990] = val;
+                    }
+                    float pre_mean = pre_sum / 3000.0f;
+                    float pre_std = sqrt((pre_sum_sq / 3000.0f) - (pre_mean * pre_mean));
+
+                    Serial.print("[CHECKPOINT A] 100Hz preprocessed - Epoch ");
+                    Serial.println(inference_count);
+                    Serial.print("mean="); Serial.print(pre_mean, 4);
+                    Serial.print(" std="); Serial.print(pre_std, 4);
+                    Serial.print(" min="); Serial.print(pre_min, 4);
+                    Serial.print(" max="); Serial.println(pre_max, 4);
+                    Serial.print("first_10:");
+                    for (int i = 0; i < 10; i++) { Serial.print(" "); Serial.print(first_10[i], 2); }
+                    Serial.println();
+                    Serial.print("last_10:");
+                    for (int i = 0; i < 10; i++) { Serial.print(" "); Serial.print(last_10[i], 2); }
+                    Serial.println();
+                  }
+
+                  // CHECKPOINT B: Epoch extraction boundaries
+                  int start_sample = inference_count * 3000;
+                  int end_sample = start_sample + 3000;
+                  Serial.print("[CHECKPOINT B] Epoch extraction - Epoch ");
+                  Serial.println(inference_count);
+                  Serial.print("start_sample="); Serial.print(start_sample);
+                  Serial.print(" end_sample="); Serial.println(end_sample);
+
+                  // CHECKPOINT C: Normalization statistics
+                  float norm_sum = 0, norm_sum_sq = 0;
+                  for (int i = 0; i < 3000; i++) {
+                    norm_sum += processed_window[i];
+                    norm_sum_sq += processed_window[i] * processed_window[i];
+                  }
+                  float norm_mean = norm_sum / 3000.0f;
+                  float norm_std = sqrt((norm_sum_sq / 3000.0f) - (norm_mean * norm_mean));
+
+                  Serial.print("[CHECKPOINT C] Normalization - Epoch ");
+                  Serial.println(inference_count);
+                  Serial.print("mean="); Serial.print(norm_mean, 8);
+                  Serial.print(" std="); Serial.println(norm_std, 8);
+                  Serial.print("first_10:");
+                  for (int i = 0; i < 10; i++) { Serial.print(" "); Serial.print(processed_window[i], 6); }
+                  Serial.println();
+                  Serial.print("last_10:");
+                  for (int i = 2990; i < 3000; i++) { Serial.print(" "); Serial.print(processed_window[i], 6); }
+                  Serial.println();
+
+                  // CHECKPOINT D: Model input info
+                  // Note: This model uses FLOAT32 inputs (not INT8 quantized)
+                  float scale;
+                  int32_t zero_point;
+                  bool has_quant = mlInference.getInputQuantizationParams(scale, zero_point);
+                  Serial.print("[CHECKPOINT D] Model input - Epoch ");
+                  Serial.println(inference_count);
+                  if (has_quant && scale > 0.0f) {
+                    // INT8 quantized model
+                    Serial.println("input_type=INT8");
+                    Serial.print("scale="); Serial.print(scale, 10);
+                    Serial.print(" zero_point="); Serial.println(zero_point);
+                  } else {
+                    // FLOAT32 model - no quantization needed
+                    Serial.println("input_type=FLOAT32 (no quantization)");
+                  }
+                  Serial.print("first_10_float:");
+                  for (int i = 0; i < 10; i++) {
+                    Serial.print(" "); Serial.print(processed_window[i], 4);
+                  }
+                  Serial.println();
+                  Serial.print("epoch_index="); Serial.print(inference_count);
+                  Serial.print(" scaled="); Serial.println(static_cast<float>(inference_count) / 1000.0f, 6);
+
+                  // Model output
+                  Serial.println("[MODEL OUTPUT]");
+                  Serial.print("probs:");
+                  for (int i = 0; i < MODEL_OUTPUT_SIZE; i++) {
+                    Serial.print(" "); Serial.print(ml_output[i], 4);
+                  }
+                  Serial.println();
+                  Serial.println();
+                }
+                // === END CHECKPOINT DEBUG ===
 
                 float max_confidence = 0.0f;
                 for (int i = 0; i < MODEL_OUTPUT_SIZE; i++) {
