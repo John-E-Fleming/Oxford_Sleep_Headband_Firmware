@@ -65,7 +65,12 @@ unsigned long samples_since_timing_reset = 0;
 bool enable_inference = true;
 bool enable_serial_plot = !FAST_PLAYBACK;  // Disable plotting in fast mode (printing slows down processing)
 bool enable_quality_check = true;
-bool enable_inference_logging = true;
+bool enable_inference_logging = false;  // OFF by default for fast playback (toggle with 'l')
+
+// EEG logging variables (for visualization)
+SdFile eegLogFile;
+bool eegLogFileOpen = false;
+unsigned long eeg_sample_index = 0;
 
 // Processing variables
 unsigned long processed_count = 0;
@@ -82,6 +87,57 @@ const float WINDOW_OVERLAP_PERCENT = 100.0f * (INFERENCE_WINDOW_SECONDS - INFERE
 // Forward declarations
 void handleSerialCommands();
 void printStatistics();
+void initializeLogging();
+void closeLogging();
+
+// Initialize logging files (called when 'l' command enables logging)
+void initializeLogging() {
+  if (!enable_inference_logging) return;
+
+  // Extract base filename (remove path if present)
+  String baseFilename = config.datafile;
+  int lastSlash = baseFilename.lastIndexOf('/');
+  if (lastSlash >= 0) {
+    baseFilename = baseFilename.substring(lastSlash + 1);
+  }
+  baseFilename.replace(".bin", "");
+
+  // Ensure /realtime_logs/ directory exists
+  if (!sd.exists("/realtime_logs")) {
+    sd.mkdir("/realtime_logs");
+  }
+
+  // Initialize prediction logger (writes to /realtime_logs/)
+  String predFilename = baseFilename + "_predictions.csv";
+  if (inferenceLogger.begin(predFilename)) {
+    Serial.print("Prediction logging to: /realtime_logs/");
+    Serial.println(predFilename);
+  }
+
+  // Initialize 100Hz EEG logger (writes to /realtime_logs/)
+  String eegPath = "/realtime_logs/" + baseFilename + "_eeg_100hz.csv";
+  if (eegLogFile.open(eegPath.c_str(), O_WRITE | O_CREAT | O_TRUNC)) {
+    eegLogFile.println("sample_index,timestamp_ms,eeg_uv");
+    eegLogFile.sync();
+    eegLogFileOpen = true;
+    eeg_sample_index = 0;
+    Serial.print("EEG logging to: ");
+    Serial.println(eegPath);
+  } else {
+    Serial.print("ERROR: Failed to open EEG log file: ");
+    Serial.println(eegPath);
+  }
+}
+
+// Close logging files
+void closeLogging() {
+  inferenceLogger.close();
+  if (eegLogFileOpen) {
+    eegLogFile.close();
+    eegLogFileOpen = false;
+    Serial.println("Log files closed");
+  }
+}
 
 void setup() {
   Serial.begin(115200);
@@ -92,10 +148,8 @@ void setup() {
   Serial.println("  p - Toggle serial plotting");
   Serial.println("  i - Toggle ML inference");
   Serial.println("  s - Show statistics");
-  Serial.println("  q - Toggle quality checking");
-  Serial.println("  l - Toggle inference logging");
+  Serial.println("  l - Toggle logging (predictions + 100Hz EEG to SD)");
   Serial.println("  d - Toggle debug logging (CSV output)");
-  Serial.println("  x - Export log to SD card");
   Serial.println("  r - Restart playback");
   Serial.println();
   
@@ -207,10 +261,8 @@ void setup() {
   // Configure sliding window parameters
   eegProcessor.configureSlidingWindow(INFERENCE_WINDOW_SECONDS, INFERENCE_INTERVAL_SECONDS);
   
-  // Initialize inference logger
-  if (enable_inference_logging) {
-    inferenceLogger.begin(1000); // Pre-allocate for 1000 records
-  }
+  // Note: Logging is OFF by default for fast playback
+  // Press 'l' to enable logging (predictions + 100Hz EEG to SD card)
 
   // Initialize debug logger
   if (debugLogger.begin(&sd)) {
@@ -355,6 +407,16 @@ void loop() {
 
         // Add processed sample to ML processor buffer
         eegProcessor.addFilteredSample(output_100hz);
+
+        // Log 100Hz sample (if logging enabled via 'l' command)
+        if (enable_inference_logging && eegLogFileOpen) {
+          eegLogFile.print(eeg_sample_index++);
+          eegLogFile.print(",");
+          eegLogFile.print((unsigned long)(processed_count * 10));  // ms at 100Hz
+          eegLogFile.print(",");
+          eegLogFile.println(output_100hz, 4);
+          if (eeg_sample_index % 1000 == 0) eegLogFile.sync();  // Sync every 1000 samples (10s)
+        }
 
         // ML inference with sliding window (if enabled and ready) - MUST BE OUTSIDE SERIAL PLOT CHECK!
         if (enable_inference && eegProcessor.isInferenceTimeReady()) {
@@ -554,6 +616,12 @@ void loop() {
                   debugLogger.logModelOutput(ml_output, MODEL_OUTPUT_SIZE, inference_count, time_s, stage_str);
                 }
 
+                // Log prediction to CSV (if logging enabled via 'l' command)
+                if (enable_inference_logging && inferenceLogger.isLogging()) {
+                  float epoch_end_seconds = (inference_count + 1) * INFERENCE_INTERVAL_SECONDS;
+                  inferenceLogger.logPrediction(inference_count, epoch_end_seconds, ml_output);
+                }
+
                 // Validation: Compare against reference predictions (if enabled)
 #ifdef ENABLE_VALIDATION_MODE
                 if (validationReader.isLoaded()) {
@@ -601,6 +669,9 @@ void loop() {
       // Check if we should stop (duration limit or end of file)
       if (sample_count >= (MAX_DURATION_SECONDS * config.sample_rate)) {
         Serial.println("Reached maximum test duration");
+
+        // Close log files if open
+        closeLogging();
 
         // Print validation summary if enabled
 #ifdef ENABLE_VALIDATION_MODE
@@ -664,11 +735,23 @@ void handleSerialCommands() {
         inference_count = 0;
         debug_100hz_index = 0;
         debug_buffer_full = false;
+        eeg_sample_index = 0;
         last_sample_time = micros();
         break;
 
+      case 'l':
+        enable_inference_logging = !enable_inference_logging;
+        Serial.print("Logging (predictions + EEG): ");
+        Serial.println(enable_inference_logging ? "ON" : "OFF");
+        if (enable_inference_logging) {
+          initializeLogging();
+        } else {
+          closeLogging();
+        }
+        break;
+
       default:
-        Serial.println("Unknown command. Use p/i/d/s/r");
+        Serial.println("Unknown command. Use p/i/d/s/r/l");
         break;
     }
   }

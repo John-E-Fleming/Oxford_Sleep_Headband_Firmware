@@ -11,6 +11,10 @@
  *   PreprocessingPipeline (4kHz→100Hz) → EEGProcessor (30s window) →
  *   MLInference → Sleep Stage
  *
+ * Output Files (on SD card):
+ *   - /realtime_logs/predictions_XXXXXX.csv - Sleep stage predictions per epoch
+ *   - /realtime_logs/eeg_100hz_XXXXXX.csv - Preprocessed EEG at 100Hz (optional)
+ *
  * Use this mode for: Production use with actual EEG headset
  *
  * To enable this mode, uncomment the REAL-TIME MODE line in platformio.ini
@@ -18,10 +22,12 @@
 
 #include <Arduino.h>
 #include <SPI.h>
+#include <SdFat.h>
 #include "ADS1299_Custom.h"
 #include "MLInference.h"
 #include "EEGProcessor.h"
 #include "PreprocessingPipeline.h"
+#include "InferenceLogger.h"
 #include "model.h"
 
 // ============================================================================
@@ -41,9 +47,17 @@ const int INFERENCE_INTERVAL_SECONDS = 30; // Non-overlapping windows
 const bool ENABLE_SAMPLE_PRINTING = false;  // Set true to print every sample (slow)
 const bool ENABLE_VERBOSE_INFERENCE = true; // Print detailed inference results
 
+// SD Card logging configuration
+const bool ENABLE_SD_LOGGING = true;        // Enable logging to SD card
+const bool ENABLE_RAW_EEG_LOGGING = true;   // Log preprocessed 100Hz EEG data
+const int RAW_EEG_SYNC_INTERVAL = 100;      // Sync raw EEG file every N samples
+
 // ============================================================================
 // Global Objects
 // ============================================================================
+
+// SD Card (using Teensy 4.1 built-in SDIO interface)
+SdFat sd;
 
 // Hardware interface
 ADS1299_Custom ads;
@@ -52,6 +66,12 @@ ADS1299_Custom ads;
 MLInference mlInference;
 EEGProcessor eegProcessor;
 PreprocessingPipeline preprocessingPipeline;
+
+// Logging
+InferenceLogger inferenceLogger;
+SdFile rawEegFile;
+bool sdInitialized = false;
+bool rawEegFileOpen = false;
 
 // Data buffers
 float eeg_sample[ADS1299_CHANNELS];
@@ -62,6 +82,88 @@ float ml_output[MODEL_OUTPUT_SIZE];
 unsigned long sample_count = 0;
 unsigned long inference_count = 0;
 unsigned long processed_100hz_count = 0;
+unsigned long session_start_time = 0;
+
+// ============================================================================
+// Helper Functions
+// ============================================================================
+
+String generateTimestampFilename(const char* prefix, const char* extension) {
+  // Generate filename with session timestamp: prefix_HHMMSS.extension
+  unsigned long seconds = millis() / 1000;
+  int hours = (seconds / 3600) % 24;
+  int minutes = (seconds / 60) % 60;
+  int secs = seconds % 60;
+
+  char filename[32];
+  snprintf(filename, sizeof(filename), "%s_%02d%02d%02d.%s",
+           prefix, hours, minutes, secs, extension);
+  return String(filename);
+}
+
+bool initializeSDCard() {
+  Serial.println("Initializing SD card...");
+
+  // Try SDIO modes first (Teensy 4.1 built-in SD slot)
+  if (sd.begin(SdioConfig(FIFO_SDIO))) {
+    Serial.println("SD card initialized (FIFO SDIO mode)");
+  } else if (sd.begin(SdioConfig(DMA_SDIO))) {
+    Serial.println("SD card initialized (DMA SDIO mode)");
+  } else {
+    Serial.println("ERROR: SD card initialization failed!");
+    Serial.println("Check that SD card is inserted and formatted as FAT32");
+    return false;
+  }
+
+  // Create logs directory
+  if (!sd.exists("/realtime_logs")) {
+    if (!sd.mkdir("/realtime_logs")) {
+      Serial.println("WARNING: Could not create /realtime_logs directory");
+    }
+  }
+
+  return true;
+}
+
+bool initializeRawEegLogger() {
+  if (!ENABLE_RAW_EEG_LOGGING || !sdInitialized) {
+    return false;
+  }
+
+  String filename = "/realtime_logs/" + generateTimestampFilename("eeg_100hz", "csv");
+
+  if (!rawEegFile.open(filename.c_str(), O_WRITE | O_CREAT | O_TRUNC)) {
+    Serial.println("WARNING: Could not create raw EEG log file");
+    return false;
+  }
+
+  // Write CSV header
+  rawEegFile.println("sample_index,timestamp_ms,eeg_uv");
+  rawEegFile.sync();
+
+  Serial.print("Raw EEG logging to: ");
+  Serial.println(filename);
+
+  return true;
+}
+
+void logRawEegSample(float eeg_value) {
+  if (!rawEegFileOpen) {
+    return;
+  }
+
+  // Write sample: index, timestamp, value
+  rawEegFile.print(processed_100hz_count);
+  rawEegFile.print(",");
+  rawEegFile.print(millis() - session_start_time);
+  rawEegFile.print(",");
+  rawEegFile.println(eeg_value, 4);
+
+  // Periodic sync to ensure data is written
+  if (processed_100hz_count % RAW_EEG_SYNC_INTERVAL == 0) {
+    rawEegFile.sync();
+  }
+}
 
 // ============================================================================
 // Setup
@@ -71,10 +173,33 @@ void setup() {
   Serial.begin(115200);
   while (!Serial && millis() < 5000) {}  // Wait up to 5 seconds for serial
 
+  session_start_time = millis();
+
   Serial.println("===========================================");
   Serial.println("Sleep Headband - Real-Time Inference Mode");
   Serial.println("===========================================");
   Serial.println();
+
+  // Initialize SD card first (for logging)
+  if (ENABLE_SD_LOGGING) {
+    sdInitialized = initializeSDCard();
+
+    if (sdInitialized) {
+      // Initialize inference logger
+      String predFilename = generateTimestampFilename("predictions", "csv");
+      if (inferenceLogger.begin(predFilename)) {
+        Serial.print("Prediction logging to: /realtime_logs/");
+        Serial.println(predFilename);
+      }
+
+      // Initialize raw EEG logger
+      if (ENABLE_RAW_EEG_LOGGING) {
+        rawEegFileOpen = initializeRawEegLogger();
+      }
+    }
+  } else {
+    Serial.println("SD card logging DISABLED");
+  }
 
   // Initialize SPI for ADS1299 communication
   SPI.begin();
@@ -125,9 +250,15 @@ void setup() {
   Serial.print(BIPOLAR_CHANNEL_POSITIVE);
   Serial.print(" - CH");
   Serial.println(BIPOLAR_CHANNEL_NEGATIVE);
-  Serial.println("  Pipeline: 4kHz → 250Hz → BP filter → 100Hz → 30s window → CNN");
+  Serial.println("  Pipeline: 4kHz -> 250Hz -> BP filter -> 100Hz -> 30s window -> CNN");
   Serial.println("  Model input: 3000 samples (30s @ 100Hz) + epoch index");
   Serial.println("  Model output: 5 classes (Wake, N1, N2, N3, REM)");
+  Serial.print("  SD logging: ");
+  Serial.println(sdInitialized ? "ENABLED" : "DISABLED");
+  if (sdInitialized) {
+    Serial.print("  Raw EEG logging: ");
+    Serial.println(rawEegFileOpen ? "ENABLED (100Hz)" : "DISABLED");
+  }
   Serial.println();
   Serial.println("===========================================");
   Serial.println("Starting real-time sleep classification...");
@@ -155,7 +286,7 @@ void loop() {
     // This computes: output = CH_positive - CH_negative
     float bipolar_sample = eeg_sample[BIPOLAR_CHANNEL_POSITIVE] - eeg_sample[BIPOLAR_CHANNEL_NEGATIVE];
 
-    // Process through complete validated pipeline: 4000Hz → 250Hz → BP filter → 100Hz
+    // Process through complete validated pipeline: 4000Hz -> 250Hz -> BP filter -> 100Hz
     float output_100hz;
     bool sample_ready = preprocessingPipeline.processSample(bipolar_sample, output_100hz);
 
@@ -163,6 +294,11 @@ void loop() {
       // New 100Hz sample ready - add to ML processor buffer
       processed_100hz_count++;
       eegProcessor.addFilteredSample(output_100hz);
+
+      // Log raw EEG at 100Hz (if enabled)
+      if (rawEegFileOpen) {
+        logRawEegSample(output_100hz);
+      }
 
       // Check if we have a full 30-second window and it's time for inference
       if (eegProcessor.isInferenceTimeReady()) {
@@ -196,7 +332,14 @@ void loop() {
               case REM_SLEEP: stage_str = "REM"; break;
             }
 
-            // Print inference result
+            // Log to SD card
+            if (inferenceLogger.isLogging()) {
+              // epoch 0 ends at 30s, epoch 1 ends at 60s, etc.
+              float epoch_end_seconds = (inference_count + 1) * INFERENCE_INTERVAL_SECONDS;
+              inferenceLogger.logPrediction(inference_count, epoch_end_seconds, ml_output);
+            }
+
+            // Print inference result to Serial
             if (ENABLE_VERBOSE_INFERENCE) {
               Serial.println();
               Serial.print("[Epoch ");
@@ -222,6 +365,10 @@ void loop() {
               Serial.print(ml_output[3], 3);
               Serial.print(" REM=");
               Serial.println(ml_output[4], 3);
+
+              if (inferenceLogger.isLogging()) {
+                Serial.println("  [Logged to SD card]");
+              }
             } else {
               // Compact output
               Serial.print(inference_count);
@@ -255,7 +402,7 @@ void loop() {
     Serial.println();
     Serial.println("--- Statistics ---");
     Serial.print("Uptime: ");
-    Serial.print(millis() / 1000);
+    Serial.print((millis() - session_start_time) / 1000);
     Serial.println(" seconds");
     Serial.print("4kHz samples: ");
     Serial.println(sample_count);
@@ -264,10 +411,47 @@ void loop() {
     Serial.print("Inferences: ");
     Serial.println(inference_count);
     Serial.print("Effective sample rate: ");
-    Serial.print(sample_count / (millis() / 1000.0f), 1);
+    Serial.print(sample_count / ((millis() - session_start_time) / 1000.0f), 1);
     Serial.println(" Hz");
+
+    if (inferenceLogger.isLogging()) {
+      Serial.print("Predictions logged: ");
+      Serial.println(inferenceLogger.getRecordCount());
+    }
+    if (rawEegFileOpen) {
+      Serial.print("EEG samples logged: ");
+      Serial.println(processed_100hz_count);
+    }
+
     Serial.println("------------------");
     Serial.println();
     last_stats = millis();
+  }
+
+  // Handle serial commands
+  if (Serial.available()) {
+    char cmd = Serial.read();
+    switch (cmd) {
+      case 's':  // Print summary
+        if (inferenceLogger.isLogging()) {
+          inferenceLogger.printSummary();
+        }
+        break;
+      case 'f':  // Flush/sync files
+        if (rawEegFileOpen) {
+          rawEegFile.sync();
+          Serial.println("Raw EEG file synced");
+        }
+        break;
+      case 'q':  // Quit - close files gracefully
+        Serial.println("Closing log files...");
+        if (rawEegFileOpen) {
+          rawEegFile.close();
+          rawEegFileOpen = false;
+        }
+        inferenceLogger.close();
+        Serial.println("Log files closed. Safe to remove SD card.");
+        break;
+    }
   }
 }
