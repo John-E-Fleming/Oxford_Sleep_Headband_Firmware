@@ -1,138 +1,237 @@
 # EEG Data Analysis Tools
 
-Python tools for analyzing EEG data logged by the Sleep Headband firmware.
+Python tools for analyzing EEG data and running sleep stage inference.
 
 ## Installation
 
 Install required Python packages:
 
 ```bash
-pip install numpy matplotlib scipy
+pip install numpy matplotlib scipy pandas scikit-learn tensorflow
 ```
 
-## Usage
+---
 
-### Reading and Analyzing Logged Data
+## Quick Start
 
-After running the batch inference test on the Teensy, you'll have several files on the SD card:
-
-- `batch_XXXXX_raw.bin` - Raw filtered EEG samples (after bandpass filter)
-- `batch_XXXXX_normalized.bin` - Normalized windows sent to the model
-- `batch_XXXXX_metadata.txt` - Metadata about the data files
-- `batch_test_XXXXX.csv` - Inference results (sleep stage predictions)
-
-Copy these files from the SD card to your computer, then run:
+### Run Inference on New Data
 
 ```bash
-python read_eeg_data.py batch_XXXXX
+# Basic usage with 1KHz data
+python tools/run_inference.py data.bin --sample-rate 1000 --channels 12 --output predictions.csv
+
+# With accelerometer extraction
+python tools/run_inference.py data.bin --sample-rate 1000 --accel 8 9 10 --save-accel --output predictions.csv
 ```
 
-This will generate:
+### Visualize Results
 
-1. **Visualizations:**
-   - `raw_eeg.png` - Time series plot of raw filtered data
-   - `normalized_window_epoch0.png` - First normalized window
-   - `window_comparison.png` - Comparison of multiple windows
-   - `spectrogram.png` - Frequency analysis (0-35 Hz)
+```bash
+# Generate hypnogram + spectrogram
+python tools/visualize_session.py predictions.csv eeg_100hz.csv
 
-2. **CSV Exports:**
-   - `raw_data_first_30s.csv` - First 30 seconds of raw data
-   - `normalized_windows.csv` - First 5 normalized windows
+# With accelerometer panel
+python tools/visualize_session.py predictions.csv eeg_100hz.csv --accel accel.csv
 
-## Comparing with Reference Model
-
-To compare your data with your co-worker's model inputs:
-
-1. Get the input data format from your co-worker's implementation
-2. Load both datasets in Python:
-
-```python
-import numpy as np
-
-# Your data
-your_windows = read_normalized_windows("batch_XXXXX_normalized.bin")
-
-# Reference data (adjust format as needed)
-reference_data = np.loadtxt("reference_input.csv")
-
-# Compare
-window_idx = 0
-your_data = your_windows[window_idx][1]
-ref_data = reference_data[:3000]
-
-print("Mean difference:", np.abs(your_data - ref_data).mean())
-print("Max difference:", np.abs(your_data - ref_data).max())
-print("Correlation:", np.corrcoef(your_data, ref_data)[0, 1])
+# Time axis in hours
+python tools/visualize_session.py predictions.csv eeg_100hz.csv --hours
 ```
 
-3. Check preprocessing parameters match:
-   - Bandpass filter: 0.5-35 Hz (verify cutoff frequencies)
-   - Z-score normalization: mean=0, std=1 per window
-   - Sample rate: 100 Hz
-   - Window size: 3000 samples (30 seconds)
+### Compare Preprocessing Options
+
+```bash
+# Auto-detect and compare all validation results
+python tools/compare_preprocessing_options.py
+
+# Compare specific options
+python tools/compare_preprocessing_options.py Default Option_A Option_D
+```
+
+---
+
+## Tool Reference
+
+### run_inference.py
+
+Flexible Python inference script supporting configurable sample rates, channels, and accelerometer data.
+
+**Features:**
+- Supports 1KHz and 4KHz input data
+- Configurable bipolar EEG channel indices
+- Accelerometer data extraction (converted to g units)
+- Option D preprocessing (best: 89.1% agreement)
+
+**Arguments:**
+```
+data_file              Input binary EEG file
+--config, -c           Config file (alternative to CLI args)
+--output, -o           Output predictions CSV
+--sample-rate, -r      Input sample rate in Hz (default: 1000)
+--channels, -n         Number of channels in file (default: 12)
+--bipolar-pos          Positive electrode channel index (default: 0)
+--bipolar-neg          Negative electrode channel index (default: 6)
+--accel X Y Z          Accelerometer channel indices (e.g., --accel 8 9 10)
+--model, -m            TFLite model path
+--save-eeg             Save preprocessed 100Hz EEG to CSV
+--save-accel           Save accelerometer data to CSV (in g units)
+--max-epochs           Maximum number of epochs to process
+```
+
+**Examples:**
+```bash
+# Different bipolar derivation (CH2 - CH4)
+python tools/run_inference.py data.bin --bipolar-pos 2 --bipolar-neg 4 --output predictions.csv
+
+# Using a config file
+python tools/run_inference.py data.bin --config config.txt
+
+# Save all outputs
+python tools/run_inference.py data.bin --save-eeg --save-accel --accel 8 9 10 --output predictions.csv
+```
+
+---
+
+### visualize_session.py
+
+Generate publication-quality visualizations of sleep sessions.
+
+**Features:**
+- Hypnogram with clinical ordering (Wake at top, N3 at bottom)
+- EEG spectrogram (0.5-30 Hz)
+- Accelerometer panel (X/Y/Z traces or magnitude)
+- Time axis in hours for long recordings
+- Stage distribution summary
+
+**Arguments:**
+```
+predictions            Predictions CSV file
+eeg                    EEG CSV file
+--dir, -d              Directory containing paired log files
+--output, -o           Output image file
+--probs                Also plot probability timeline
+--accel                Accelerometer CSV file
+--accel-mode           Display mode: 'xyz' (default) or 'magnitude'
+--hours                Show time axis in hours
+--no-spec              Skip spectrogram computation (faster)
+```
+
+**Examples:**
+```bash
+# Basic visualization
+python tools/visualize_session.py predictions.csv eeg_100hz.csv
+
+# With accelerometer magnitude
+python tools/visualize_session.py predictions.csv eeg_100hz.csv --accel accel.csv --accel-mode magnitude
+
+# Long recording (hours axis, skip spectrogram for speed)
+python tools/visualize_session.py predictions.csv eeg_100hz.csv --hours --no-spec
+```
+
+---
+
+### compare_preprocessing_options.py
+
+Compare confusion matrices across different preprocessing pipeline options.
+
+**Features:**
+- Auto-detects all available validation results
+- Side-by-side confusion matrix plots
+- Per-stage recall comparison
+- Pairwise agreement analysis
+
+**Arguments:**
+```
+options                Specific options to compare (default: all)
+--list                 List available options
+--output, -o           Output filename (default: auto-generated)
+```
+
+**Examples:**
+```bash
+# List available options
+python tools/compare_preprocessing_options.py --list
+
+# Compare all options
+python tools/compare_preprocessing_options.py
+
+# Compare specific options
+python tools/compare_preprocessing_options.py Default Option_D
+```
+
+**Validation Results Location:**
+Results should be placed in `data/validation_testing/<OptionName>/` with a `*_predictions.csv` file.
+
+---
+
+### test_prediction_agreement.py
+
+Test Python preprocessing against reference predictions.
+
+**Purpose:**
+- Verify preprocessing pipeline matches training code
+- Compare predictions at multiple processing stages
+
+**Usage:**
+```bash
+python tools/test_prediction_agreement.py
+```
+
+---
 
 ## File Formats
 
-### Raw Data File (`*_raw.bin`)
-- Binary file of 32-bit floats (little-endian)
-- Sequential samples at 100 Hz
-- After bipolar derivation and bandpass filtering
-- Before z-score normalization
-
-Read in Python:
-```python
-data = np.fromfile("batch_XXXXX_raw.bin", dtype=np.float32)
+### Predictions CSV
+```csv
+epoch,timestamp_s,prob_wake,prob_n1,prob_n2,prob_n3,prob_rem,predicted_stage
+0,30.0,0.918,0.059,0.020,0.000,0.000,Wake
+1,60.0,0.996,0.000,0.000,0.000,0.000,Wake
 ```
 
-### Normalized Data File (`*_normalized.bin`)
-- Binary file with structured windows
-- Each window:
-  - 4 bytes: epoch_index (int32)
-  - 4 bytes: window_size (int32)
-  - window_size * 4 bytes: samples (float32 array)
-
-### Metadata File (`*_metadata.txt`)
-- Human-readable text file
-- Key-value pairs describing the data
-- Processing pipeline documentation
-
-## Generating Sleep Stage Summary
-
-The inference logger already generates a summary. To visualize it:
-
-```python
-import pandas as pd
-import matplotlib.pyplot as plt
-
-# Read inference results
-df = pd.read_csv("batch_test_XXXXX.csv")
-
-# Plot sleep stages over time
-plt.figure(figsize=(14, 4))
-plt.plot(df['time_seconds'] / 3600, df['predicted_stage'])
-plt.xlabel('Time (hours)')
-plt.ylabel('Sleep Stage')
-plt.yticks([0, 1, 2, 3, 4], ['N3', 'N2', 'N1', 'REM', 'Wake'])
-plt.title('Sleep Stages Over Time')
-plt.grid(True, alpha=0.3)
-plt.savefig('sleep_stages.png', dpi=150)
+### EEG 100Hz CSV
+```csv
+sample_index,timestamp_ms,eeg_uv
+0,0,-12.3456
+1,10,-11.8234
 ```
 
-## Spectrogram Generation
+### Accelerometer CSV (g units)
+```csv
+sample_index,timestamp_ms,accel_x_g,accel_y_g,accel_z_g
+0,0.0,0.012345,-0.998765,0.054321
+1,1.0,0.012456,-0.998654,0.054432
+```
 
-The `read_eeg_data.py` script automatically generates a spectrogram showing:
-- Frequency range: 0-35 Hz (delta, theta, alpha, beta bands)
-- Time resolution: 4-second windows with 50% overlap
-- Color scale: Power spectral density in dB
+**Accelerometer Conversion:** Raw values are converted to g units using: `g = raw * 16.0 / 4095.0`
 
-For custom spectrograms with different parameters, modify the `generate_spectrogram()` function.
+### Raw Binary Data
+- Sequential samples in int32, int16, or float32 format
+- Channels interleaved: `[CH0_S0, CH1_S0, ..., CHn_S0, CH0_S1, CH1_S1, ...]`
+
+---
+
+## Preprocessing Pipeline Options
+
+| Option | Pipeline | Agreement |
+|--------|----------|-----------|
+| Default | 4kHz→250Hz(decimate)→filter@250Hz→100Hz | 81.4% |
+| A | 4kHz→500Hz(decimate)→100Hz(avg)→filter@100Hz | 86.4% |
+| B | 4kHz→500Hz(average)→100Hz(avg)→filter@100Hz | 88.4% |
+| C | 4kHz→100Hz(decimate)→filter@100Hz | 73.6% |
+| **D** | **4kHz→100Hz(average 40)→filter@100Hz** | **89.1%** |
+
+**Recommendation:** Use Option D for best accuracy.
+
+---
 
 ## Troubleshooting
 
-**"No module named 'scipy'"**: Install scipy with `pip install scipy`
+**"No module named 'tensorflow'"**: Install with `pip install tensorflow`
 
-**"File not found"**: Make sure you're running the script from the directory containing the data files
+**"No module named 'sklearn'"**: Install with `pip install scikit-learn`
 
-**"Incomplete window data"**: The firmware may have been interrupted. Check the last complete window index in the metadata.
+**"Model not found"**: Ensure model file exists at `data/example_datasets/debug/8_tflite_quantized_model.tflite`
 
-**Normalization looks wrong**: Check that mean ≈ 0 and std ≈ 1. If not, there may be an issue with the EEG processor.
+**Low agreement**: Check:
+- Correct sample rate specified
+- Correct bipolar channel indices
+- Data format matches (int32 vs float32)

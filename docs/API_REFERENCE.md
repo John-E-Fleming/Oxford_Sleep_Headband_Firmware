@@ -6,9 +6,9 @@ Technical reference for key classes and functions in the sleep headband firmware
 
 ## Core Classes
 
-### PreprocessingPipeline
+### PreprocessingPipeline (Default)
 
-Complete signal preprocessing from 4kHz to 100Hz.
+Default signal preprocessing from 4kHz to 100Hz via 250Hz intermediate.
 
 **Header:** `include/PreprocessingPipeline.h`
 
@@ -21,6 +21,8 @@ public:
 };
 ```
 
+**Pipeline:** 4kHz → 250Hz (decimate) → filter@250Hz → 100Hz
+
 #### Methods
 
 | Method | Description |
@@ -29,10 +31,41 @@ public:
 | `reset()` | Reset internal state (call when restarting) |
 | `processSample(input, output)` | Process one 4kHz sample, returns true when 100Hz sample ready |
 
+---
+
+### PreprocessingPipelineAlt (Recommended)
+
+Alternative preprocessing pipelines with better accuracy. **Option D is recommended (89.1% agreement).**
+
+**Header:** `include/PreprocessingPipelineAlt.h`
+
+```cpp
+class PreprocessingPipelineAlt {
+public:
+    PreprocessingPipelineAlt();
+    void reset();
+    bool processSample(float input, float& output_100hz);
+};
+```
+
+**Pipeline options (selected via build flags):**
+
+| Build Flag | Pipeline | Agreement |
+|------------|----------|-----------|
+| `-DUSE_ALT_PREPROCESSING_A` | 4kHz→500Hz(decimate)→100Hz(avg)→filter@100Hz | 86.4% |
+| `-DUSE_ALT_PREPROCESSING_B` | 4kHz→500Hz(average)→100Hz(avg)→filter@100Hz | 88.4% |
+| `-DUSE_ALT_PREPROCESSING_C` | 4kHz→100Hz(decimate)→filter@100Hz | 73.6% |
+| `-DUSE_ALT_PREPROCESSING_D` | 4kHz→100Hz(average)→filter@100Hz | **89.1%** |
+
 #### Usage Example
 
 ```cpp
-PreprocessingPipeline pipeline;
+#ifdef USE_ALT_PREPROCESSING_D
+PreprocessingPipelineAlt pipeline;  // Uses Option D
+#else
+PreprocessingPipeline pipeline;      // Uses Default
+#endif
+
 float input_4khz = ads.convertToMicrovolts(rawData[0]) - ads.convertToMicrovolts(rawData[6]);
 float output_100hz;
 
@@ -298,8 +331,12 @@ enum EEGDataFormat {
 | `vref` | float | Reference voltage | 4.5 |
 | `bipolar_channel_positive` | int | Positive electrode index | 0 |
 | `bipolar_channel_negative` | int | Negative electrode index | 6 |
+| `has_accelerometer` | bool | Whether file has accelerometer data | false |
+| `accel_channel_x` | int | Accelerometer X channel index | 8 |
+| `accel_channel_y` | int | Accelerometer Y channel index | 9 |
+| `accel_channel_z` | int | Accelerometer Z channel index | 10 |
 
-### Example
+### Example (4kHz, 9 channels)
 
 ```ini
 datafile=SdioLogger_miklos_night_2.bin
@@ -311,6 +348,25 @@ vref=4.5
 bipolar_channel_positive=0
 bipolar_channel_negative=6
 ```
+
+### Example (1kHz with accelerometer)
+
+```ini
+datafile=new_recording.bin
+sample_rate=1000
+channels=12
+format=int32
+gain=24
+vref=4.5
+bipolar_channel_positive=0
+bipolar_channel_negative=6
+has_accelerometer=true
+accel_channel_x=8
+accel_channel_y=9
+accel_channel_z=10
+```
+
+**Note:** Accelerometer data is converted to g units using: `g = raw * 16.0 / 4095.0`
 
 ---
 
@@ -334,6 +390,23 @@ bipolar_channel_negative=6
 ### Adding New Preprocessing Stage
 
 1. Create new class in `include/` and `src/`
-2. Add to pipeline in `PreprocessingPipeline.cpp`
+2. Add to pipeline in `PreprocessingPipeline.cpp` or `PreprocessingPipelineAlt.cpp`
 3. Update reset() to clear new state
-4. Validate against Python reference
+4. Add build flag to `platformio.ini` if creating a new option
+5. Validate against Python reference using:
+   ```bash
+   python tools/run_inference.py data.bin --output predictions.csv
+   python tools/compare_preprocessing_options.py
+   ```
+
+### Selecting Preprocessing Pipeline
+
+Add one of these flags to `build_flags` in `platformio.ini`:
+
+```ini
+; Default (no flag): 4kHz→250Hz→filter@250Hz→100Hz (81.4% agreement)
+-DUSE_ALT_PREPROCESSING_A  ; Option A: 86.4% agreement
+-DUSE_ALT_PREPROCESSING_B  ; Option B: 88.4% agreement
+-DUSE_ALT_PREPROCESSING_C  ; Option C: 73.6% agreement (not recommended)
+-DUSE_ALT_PREPROCESSING_D  ; Option D: 89.1% agreement (RECOMMENDED)
+```

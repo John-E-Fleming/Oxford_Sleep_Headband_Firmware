@@ -47,7 +47,7 @@ The firmware implements a complete EEG signal processing pipeline for real-time 
 
 ## Data Flow
 
-### Input Stage (4000 Hz)
+### Input Stage (1000 Hz or 4000 Hz)
 
 Data can come from two sources:
 
@@ -59,7 +59,8 @@ Data can come from two sources:
 2. **SD Card Playback** (`main_playback_inference.cpp`)
    - Pre-recorded EEG files
    - Binary format (int32, interleaved)
-   - Configurable via `config.txt`
+   - Configurable sample rate (1kHz, 4kHz) via `config.txt`
+   - Optional accelerometer channels
 
 ### Bipolar Derivation
 
@@ -72,10 +73,22 @@ bipolar_sample = channel[positive] - channel[negative]
 
 This matches standard sleep EEG montage (F3-M2).
 
-### Preprocessing Pipeline (4kHz → 100Hz)
+### Preprocessing Pipeline (Input → 100Hz)
 
-The `PreprocessingPipeline` class performs three stages:
+Multiple preprocessing pipelines are available, selected via build flags in `platformio.ini`.
 
+**Option D (Recommended - 89.1% agreement):**
+```
+4000 Hz input (or 1000 Hz)
+     │
+     ▼ Average every N samples (N=40 for 4kHz, N=10 for 1kHz)
+100 Hz
+     │
+     ▼ 5th-order Butterworth bandpass (0.5-30 Hz)
+100 Hz output
+```
+
+**Default (Legacy - 81.4% agreement):**
 ```
 4000 Hz input
      │
@@ -89,10 +102,21 @@ The `PreprocessingPipeline` class performs three stages:
 100 Hz output
 ```
 
+**Preprocessing Pipeline Options:**
+
+| Option | Build Flag | Pipeline | Agreement |
+|--------|------------|----------|-----------|
+| Default | (none) | 4kHz→250Hz→filter@250Hz→100Hz | 81.4% |
+| A | `-DUSE_ALT_PREPROCESSING_A` | 4kHz→500Hz→100Hz→filter@100Hz | 86.4% |
+| B | `-DUSE_ALT_PREPROCESSING_B` | 4kHz→500Hz(avg)→100Hz→filter@100Hz | 88.4% |
+| C | `-DUSE_ALT_PREPROCESSING_C` | 4kHz→100Hz(decimate)→filter@100Hz | 73.6% |
+| **D** | `-DUSE_ALT_PREPROCESSING_D` | **4kHz→100Hz(avg)→filter@100Hz** | **89.1%** |
+
 **Key parameters:**
-- Filter: 6th-order Butterworth, 0.5-30 Hz
-- Coefficients match Python training pipeline exactly
+- Filter: 5th-order Butterworth, 0.5-30 Hz (Option D) or 6th-order (Default)
+- Coefficients match Python training pipeline
 - Output rate: 100 Hz (model input requirement)
+- Supports configurable input sample rates (1kHz, 4kHz)
 
 ### EEG Processor (Windowing)
 
@@ -124,8 +148,10 @@ The `MLInference` class runs the CNN model:
 | Component | File | Responsibility |
 |-----------|------|----------------|
 | ADS1299_Custom | `ADS1299_Custom.h/.cpp` | Hardware SPI interface, ADC conversion |
-| PreprocessingPipeline | `PreprocessingPipeline.h/.cpp` | Downsampling, filtering, resampling |
-| TrainingBandpassFilter | `TrainingBandpassFilter.h/.cpp` | Butterworth filter coefficients |
+| PreprocessingPipeline | `PreprocessingPipeline.h/.cpp` | Default downsampling, filtering, resampling |
+| PreprocessingPipelineAlt | `PreprocessingPipelineAlt.h/.cpp` | Alternative pipelines (Options A-D) |
+| TrainingBandpassFilter | `TrainingBandpassFilter.h/.cpp` | Butterworth filter (6th-order, 250Hz) |
+| BandpassFilter100Hz | `BandpassFilter100Hz.h/.cpp` | Butterworth filter (5th-order, 100Hz) |
 | EEGProcessor | `EEGProcessor.h/.cpp` | Windowing, normalization, buffering |
 | MLInference | `MLInference.h/.cpp` | TFLite interpreter, model execution |
 | EEGFileReader | `EEGFileReader.h/.cpp` | SD card file reading |
@@ -143,17 +169,25 @@ sleep_headband_firmware/
 │   ├── main_data_streaming.cpp      # Debug mode (no ML)
 │   ├── EEGProcessor.cpp             # Signal processing
 │   ├── MLInference.cpp              # ML inference
-│   ├── PreprocessingPipeline.cpp    # Pipeline implementation
+│   ├── PreprocessingPipeline.cpp    # Default pipeline (250Hz filter)
+│   ├── PreprocessingPipelineAlt.cpp # Alt pipelines (Options A-D)
+│   ├── BandpassFilter100Hz.cpp      # 100Hz bandpass filter
 │   └── ...
 ├── include/                          # Header files
 │   ├── model.h                      # TFLite model (byte array)
 │   ├── ADS1299_Custom.h             # Hardware interface
 │   ├── EEGProcessor.h               # Processor interface
 │   ├── MLInference.h                # ML interface
-│   ├── PreprocessingPipeline.h      # Pipeline interface
+│   ├── PreprocessingPipeline.h      # Default pipeline interface
+│   ├── PreprocessingPipelineAlt.h   # Alt pipelines interface
+│   ├── BandpassFilter100Hz.h        # 100Hz filter interface
 │   └── ...
 ├── docs/                            # Documentation
-├── tools/                           # Python validation tools
+├── tools/                           # Python tools
+│   ├── run_inference.py             # Flexible Python inference
+│   ├── visualize_session.py         # Session visualization
+│   ├── compare_preprocessing_options.py  # Pipeline comparison
+│   └── ...
 ├── data/                            # Sample data files
 └── platformio.ini                   # Build configuration
 ```
@@ -268,23 +302,27 @@ build_src_filter = +<*> -<main_realtime_inference.cpp> -<main_data_streaming.cpp
 
 | Metric | Value |
 |--------|-------|
-| Input sample rate | 4000 Hz |
+| Input sample rate | 1000 Hz or 4000 Hz (configurable) |
 | Output sample rate | 100 Hz |
 | Window size | 30 seconds (3000 samples) |
 | Inference time | ~130 ms |
 | Real-time factor | ~90x faster than real-time |
-| Validation agreement | 81.4% |
+| Validation agreement (Option D) | 89.1% |
 
 ---
 
 ## Validation Status
 
-The preprocessing pipeline has been validated against Python reference:
+Multiple preprocessing pipelines have been validated against Python reference:
 
-| Stage | Agreement | Notes |
-|-------|-----------|-------|
-| Python (reference EEG) | 100% | Model is correct |
-| Python (our preprocessing) | 86.8% | Preprocessing verified |
-| Teensy (embedded) | 81.4% | Production ready |
+| Pipeline | Python Agreement | Teensy Agreement | Notes |
+|----------|-----------------|------------------|-------|
+| Default | 86.8% | 81.4% | Original implementation |
+| Option A | 86.4% | ~86% | Decimate to 500Hz first |
+| Option B | 88.4% | ~88% | Average to 500Hz first |
+| Option C | 73.6% | ~74% | Direct decimate (not recommended) |
+| **Option D** | **89.1%** | **~89%** | **Recommended** |
+
+**Recommendation:** Use Option D (`-DUSE_ALT_PREPROCESSING_D` in platformio.ini) for best accuracy.
 
 See [VALIDATION_GUIDE.md](VALIDATION_GUIDE.md) for details.

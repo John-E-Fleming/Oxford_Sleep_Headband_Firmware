@@ -154,9 +154,12 @@ Solutions to common problems with the sleep headband firmware.
 
 **Check:**
 1. Bipolar channels correct (positive - negative)
-2. Sample rate matches (4000 Hz expected)
+2. Sample rate matches config (1000 Hz or 4000 Hz)
 3. Gain/vref settings correct in config.txt
-4. Preprocessing pipeline enabled
+4. Preprocessing pipeline enabled (Option D recommended)
+5. Correct downsampling ratio for sample rate:
+   - 4kHz input: ratio = 40 (average 40 samples → 100Hz)
+   - 1kHz input: ratio = 10 (average 10 samples → 100Hz)
 
 ### Inference takes too long (> 500ms)
 
@@ -169,9 +172,34 @@ Solutions to common problems with the sleep headband firmware.
 
 ## Validation Problems
 
-### Low agreement (< 70%)
+### Low agreement (< 80%)
 
-**Systematic debugging:**
+**First step: Use Option D preprocessing**
+
+Option D achieves 89.1% agreement (vs 81.4% for default). Add to `platformio.ini`:
+
+```ini
+build_flags =
+    ...
+    -DUSE_ALT_PREPROCESSING_D
+```
+
+Then rebuild:
+```bash
+pio run --target clean && pio run
+```
+
+**Preprocessing options comparison:**
+
+| Option | Agreement | Build Flag |
+|--------|-----------|------------|
+| Default | 81.4% | (none) |
+| Option A | 86.4% | `-DUSE_ALT_PREPROCESSING_A` |
+| Option B | 88.4% | `-DUSE_ALT_PREPROCESSING_B` |
+| Option C | 73.6% | `-DUSE_ALT_PREPROCESSING_C` |
+| **Option D** | **89.1%** | `-DUSE_ALT_PREPROCESSING_D` |
+
+**If still low, systematic debugging:**
 
 1. **Check library version:**
    ```bash
@@ -180,13 +208,18 @@ Solutions to common problems with the sleep headband firmware.
    Should match specified commit hash.
 
 2. **Check filter coefficients:**
-   Compare `TrainingBandpassFilter.h` with Python training code.
+   Compare `BandpassFilter100Hz.h` (Option D) or `TrainingBandpassFilter.h` (Default) with Python training code.
 
 3. **Check preprocessing pipeline:**
    Enable checkpoint debugging, compare with Python.
 
 4. **Check model:**
    Verify `include/model.h` matches Python model.
+
+5. **Compare with Python inference:**
+   ```bash
+   python tools/run_inference.py data.bin --sample-rate 4000 --output python_predictions.csv
+   ```
 
 ### "Validation mode enabled but failed to load"
 
@@ -249,6 +282,49 @@ pio device list
 ```bash
 pio device monitor --filter time
 ```
+
+---
+
+## Python Tools Problems
+
+### "No module named 'tensorflow'"
+
+```bash
+pip install tensorflow
+```
+
+### "No module named 'sklearn'"
+
+```bash
+pip install scikit-learn
+```
+
+### "Model not found"
+
+Ensure the TFLite model exists:
+```bash
+ls data/example_datasets/debug/8_tflite_quantized_model.tflite
+```
+
+### Low agreement in Python inference
+
+**Check:**
+1. Correct sample rate specified (`--sample-rate`)
+2. Correct bipolar channel indices (`--bipolar-pos`, `--bipolar-neg`)
+3. Data format matches (int32 by default)
+
+**Debug by saving intermediate data:**
+```bash
+python tools/run_inference.py data.bin --save-eeg --output predictions.csv
+```
+
+### Accelerometer data looks wrong
+
+**Check conversion formula:** `g = raw * 16.0 / 4095.0`
+
+**Verify column names:**
+- New format: `accel_x_g`, `accel_y_g`, `accel_z_g` (already in g units)
+- Old format: `accel_x`, `accel_y`, `accel_z` (needs conversion)
 
 ---
 

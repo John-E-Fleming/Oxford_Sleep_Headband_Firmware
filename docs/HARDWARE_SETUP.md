@@ -45,10 +45,12 @@ The Teensy 4.1 has a built-in SD card slot using SDIO interface. No additional w
 
 | Parameter | Value | Register |
 |-----------|-------|----------|
-| Sample Rate | 4000 Hz | CONFIG1 (0x02) |
+| Sample Rate | 4000 Hz (or 1000 Hz) | CONFIG1 (0x02) |
 | Gain | 24x | CHnSET (0x60) |
 | Input Type | Normal | CHnSET |
 | Reference | Internal 4.5V | CONFIG3 |
+
+**Supported sample rates:** 1000 Hz or 4000 Hz (configured in `config.txt`)
 
 ### Modifying Pin Assignments
 
@@ -81,7 +83,7 @@ SD Card Root/
     └── reference_predictions.csv  # Validation data (optional)
 ```
 
-### config.txt Example
+### config.txt Example (4kHz, 9 channels)
 
 ```ini
 datafile=SdioLogger_miklos_night_2.bin
@@ -95,6 +97,25 @@ bipolar_channel_negative=6
 ml_target_sample_rate=100
 ml_window_seconds=30
 ```
+
+### config.txt Example (1kHz with accelerometer)
+
+```ini
+datafile=new_recording.bin
+sample_rate=1000
+channels=12
+format=int32
+gain=24
+vref=4.5
+bipolar_channel_positive=0
+bipolar_channel_negative=6
+has_accelerometer=true
+accel_channel_x=8
+accel_channel_y=9
+accel_channel_z=10
+```
+
+**Note:** Accelerometer data is converted to g units: `g = raw * 16.0 / 4095.0`
 
 ---
 

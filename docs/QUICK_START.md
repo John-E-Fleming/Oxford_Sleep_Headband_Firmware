@@ -108,7 +108,7 @@ You should see:
 - SD card initialization success
 - ML inference ready message
 - Sleep stage predictions every 30 seconds
-- ~81% agreement with reference predictions (if validation enabled)
+- ~89% agreement with reference predictions (if using Option D preprocessing)
 
 ---
 
@@ -174,7 +174,15 @@ ML inference ready (real model)
 | "SD card initialization failed" | Check card is FAT32, properly inserted |
 | No serial output | Check COM port, baud rate (115200), reset Teensy |
 | "Failed to initialize ADS1299" | Check wiring, power supply |
-| Low validation agreement (<70%) | Check TFLite library version, filter coefficients |
+| Low validation agreement (<80%) | Use Option D preprocessing (`-DUSE_ALT_PREPROCESSING_D`) |
+| Agreement still low | Check TFLite library version, sample rate config |
+
+**Recommended build flags for best accuracy:**
+```ini
+build_flags =
+    ...
+    -DUSE_ALT_PREPROCESSING_D  ; Option D: 89.1% agreement
+```
 
 ---
 
@@ -198,3 +206,31 @@ While running in playback mode, press these keys in the serial monitor:
 | `s` | Show statistics |
 | `d` | Toggle debug logging |
 | `r` | Restart playback |
+| `l` | Toggle CSV logging to SD card |
+| `t` | Toggle timing statistics |
+
+**Logging output files:**
+- `<datafile>_predictions.csv` - Sleep stage predictions
+- `<datafile>_eeg_100hz.csv` - Preprocessed EEG data
+
+---
+
+## Python Tools Quick Reference
+
+After collecting data, use Python tools for analysis:
+
+```bash
+# Run inference on new data (1KHz or 4KHz supported)
+python tools/run_inference.py data.bin --sample-rate 1000 --output predictions.csv
+
+# With accelerometer extraction (saved in g units)
+python tools/run_inference.py data.bin --accel 8 9 10 --save-accel --output predictions.csv
+
+# Visualize results
+python tools/visualize_session.py predictions.csv eeg_100hz.csv
+
+# Visualize with accelerometer
+python tools/visualize_session.py predictions.csv eeg_100hz.csv --accel accel.csv --hours
+```
+
+See `tools/README.md` for full documentation.

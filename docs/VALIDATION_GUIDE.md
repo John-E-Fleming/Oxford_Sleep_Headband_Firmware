@@ -16,16 +16,30 @@ Validation ensures the embedded firmware produces the same sleep stage predictio
 
 ## Validation Results Summary
 
+### Preprocessing Pipeline Options
+
+Multiple preprocessing pipelines have been tested. **Option D is recommended** for best accuracy:
+
+| Option | Pipeline | Agreement |
+|--------|----------|-----------|
+| Default | 4kHz→250Hz(decimate)→filter@250Hz→100Hz | 81.4% |
+| A | 4kHz→500Hz(decimate)→100Hz(avg)→filter@100Hz | 86.4% |
+| B | 4kHz→500Hz(average)→100Hz(avg)→filter@100Hz | 88.4% |
+| C | 4kHz→100Hz(decimate)→filter@100Hz | 73.6% |
+| **D** | **4kHz→100Hz(average 40)→filter@100Hz** | **89.1%** |
+
+### Platform Agreement
+
 | Platform | Agreement | Notes |
 |----------|-----------|-------|
 | Python (reference EEG) | 100% | Model inference is correct |
-| Python (our preprocessing) | 86.8% | Preprocessing matches training |
-| **Teensy (embedded)** | **81.4%** | 781/959 epochs match |
+| Python (Option D preprocessing) | 89.1% | Best preprocessing option |
+| **Teensy (Option D)** | **~89%** | Recommended configuration |
 
-The 81.4% agreement is acceptable because:
-- ~5% difference is due to floating-point precision differences
-- Remaining differences occur at sleep stage boundaries (ambiguous epochs)
-- The model achieves similar accuracy to the reference implementation
+The remaining ~11% disagreement is acceptable because:
+- Differences occur at sleep stage boundaries (ambiguous epochs)
+- Low confidence epochs (max probability < 60%)
+- Floating-point precision differences (ARM vs x86)
 
 ---
 
@@ -81,6 +95,16 @@ Ensure `platformio.ini` has:
 build_flags =
     ...
     -DENABLE_VALIDATION_MODE
+    -DUSE_ALT_PREPROCESSING_D  ; Recommended: Option D preprocessing
+```
+
+**Preprocessing Pipeline Selection:**
+```ini
+; Default (no flag): Standard pipeline - 4kHz->250Hz->filter@250Hz->100Hz
+; -DUSE_ALT_PREPROCESSING_A  ; Alt A: 4kHz->500Hz(decimate)->100Hz(avg)->filter@100Hz
+; -DUSE_ALT_PREPROCESSING_B  ; Alt B: 4kHz->500Hz(average)->100Hz(avg)->filter@100Hz
+; -DUSE_ALT_PREPROCESSING_C  ; Alt C: 4kHz->100Hz(decimate, every 40th)->filter@100Hz
+-DUSE_ALT_PREPROCESSING_D    ; Alt D: 4kHz->100Hz(average 40 samples)->filter@100Hz (BEST)
 ```
 
 ### Step 4: Build and Run
@@ -122,19 +146,38 @@ Located in `tools/`:
 
 | Script | Purpose |
 |--------|---------|
-| `test_prediction_agreement.py` | Compare Python vs reference |
-| `generate_reference_predictions.py` | Create reference CSV |
-| `compare_teensy_python.py` | Analyze checkpoint data |
+| `run_inference.py` | **Main inference script** - flexible Python inference with configurable sample rates |
+| `visualize_session.py` | Generate hypnogram, spectrogram, and accelerometer visualizations |
+| `compare_preprocessing_options.py` | Compare confusion matrices across preprocessing options |
+| `test_prediction_agreement.py` | Compare Python vs reference predictions |
 
-### Running Python Validation
+### Running Python Inference
 
 ```bash
-cd tools
-python test_prediction_agreement.py \
-    --model ../include/model.tflite \
-    --data ../data/SdioLogger_miklos_night_2.bin \
-    --reference reference_predictions.csv
+# Basic usage with 1KHz data
+python tools/run_inference.py data.bin --sample-rate 1000 --channels 12 --output predictions.csv
+
+# With accelerometer extraction (saves in g units)
+python tools/run_inference.py data.bin --sample-rate 1000 --accel 8 9 10 --save-accel --output predictions.csv
+
+# 4KHz data with different bipolar derivation
+python tools/run_inference.py data.bin --sample-rate 4000 --bipolar-pos 2 --bipolar-neg 4 --output predictions.csv
 ```
+
+### Comparing Preprocessing Options
+
+```bash
+# Auto-detect and compare all validation results
+python tools/compare_preprocessing_options.py
+
+# Compare specific options
+python tools/compare_preprocessing_options.py Default Option_A Option_D
+
+# List available options
+python tools/compare_preprocessing_options.py --list
+```
+
+Results should be placed in `data/validation_testing/<OptionName>/` with a `*_predictions.csv` file.
 
 ---
 
@@ -302,11 +345,25 @@ Before declaring validation complete:
 
 These fixes improved agreement from 27.6% to 81.4%.
 
+### Preprocessing Pipeline Optimization
+
+After initial validation, multiple preprocessing approaches were tested:
+
+| Option | Pipeline | Agreement | Status |
+|--------|----------|-----------|--------|
+| Default | 4kHz→250Hz(decimate)→filter@250Hz→100Hz | 81.4% | Original |
+| A | 4kHz→500Hz(decimate)→100Hz(avg)→filter@100Hz | 86.4% | Better |
+| B | 4kHz→500Hz(average)→100Hz(avg)→filter@100Hz | 88.4% | Better |
+| C | 4kHz→100Hz(decimate)→filter@100Hz | 73.6% | Worse |
+| **D** | **4kHz→100Hz(average 40)→filter@100Hz** | **89.1%** | **Best** |
+
+**Key insight:** Filtering at 100Hz (after downsampling) instead of 250Hz provides better agreement with the Python training pipeline. Option D's simple approach of averaging 40 samples followed by filtering at 100Hz achieves the best results.
+
 ---
 
 ## Post-Session Visualization
 
-After running the firmware (playback or real-time mode), use the visualization script to quickly review the session data.
+After running the firmware (playback or real-time mode), use the visualization script to review session data.
 
 ### Enabling Logging in Playback Mode
 
@@ -338,11 +395,29 @@ sample_index,timestamp_ms,eeg_uv
 1,10,-11.8234
 ```
 
+**Accelerometer CSV format (g units):**
+```csv
+sample_index,timestamp_ms,accel_x_g,accel_y_g,accel_z_g
+0,0.0,0.012345,-0.998765,0.054321
+1,1.0,0.012456,-0.998654,0.054432
+```
+
+Accelerometer conversion: `g = raw * 16.0 / 4095.0`
+
 ### Running the Visualization Script
 
 ```bash
-# With specific files
+# Basic visualization
 python tools/visualize_session.py predictions.csv eeg_100hz.csv
+
+# With accelerometer panel (X/Y/Z traces)
+python tools/visualize_session.py predictions.csv eeg_100hz.csv --accel accel.csv
+
+# With accelerometer magnitude
+python tools/visualize_session.py predictions.csv eeg_100hz.csv --accel accel.csv --accel-mode magnitude
+
+# Long recording (hours axis, skip spectrogram for speed)
+python tools/visualize_session.py predictions.csv eeg_100hz.csv --hours --no-spec
 
 # With a directory (auto-finds paired files)
 python tools/visualize_session.py --dir /path/to/sd_card/
@@ -353,14 +428,17 @@ python tools/visualize_session.py pred.csv eeg.csv --probs
 
 ### Output
 
-The script generates:
+The script generates a multi-panel figure:
 
 - **Hypnogram** (top panel): Sleep stages over time
   - Wake at top, N3 at bottom (clinical standard)
   - Color-coded stage bands
-- **Spectrogram** (bottom panel): EEG power spectrum (0.5-30 Hz)
+- **Spectrogram** (middle panel): EEG power spectrum (0.5-30 Hz)
   - Frequency bands labeled (Delta, Theta, Alpha, Beta)
   - Aligned with hypnogram timestamps
+- **Accelerometer** (optional bottom panel): Movement data
+  - xyz mode: X, Y, Z traces overlaid (in g units)
+  - magnitude mode: sqrt(X² + Y² + Z²) (in g units)
 - **Summary statistics**: Stage distribution and session duration
 
 ### Example Workflow
@@ -376,10 +454,12 @@ pio device monitor
 # 4. Wait for playback to complete
 # 5. Remove SD card and copy files to PC
 
-# 6. Generate visualization
+# 6. Generate visualization with accelerometer
 python tools/visualize_session.py \
     SdioLogger_miklos_night_2_predictions.csv \
-    SdioLogger_miklos_night_2_eeg_100hz.csv
+    SdioLogger_miklos_night_2_eeg_100hz.csv \
+    --accel SdioLogger_miklos_night_2_accel.csv \
+    --hours
 
 # Output: session_plot_*.png
 ```
@@ -390,7 +470,9 @@ python tools/visualize_session.py \
 - Spectrogram shows increased delta (slow wave) power during N3
 - REM periods show mixed frequency activity
 - Stage transitions are gradual, not random
+- Low accelerometer activity during sleep stages
 
 **Potential issues:**
 - Random, noisy stage classifications may indicate signal quality problems
 - Constant single-stage output may indicate model or preprocessing issues
+- High accelerometer activity during classified sleep may indicate movement artifacts

@@ -4,15 +4,22 @@ Session Visualization Tool
 ===========================
 
 Creates a combined spectrogram + hypnogram visualization from real-time
-session data logged to SD card.
+session data logged to SD card. Optionally includes accelerometer data.
 
 Input files (from /realtime_logs/ on SD card):
     - predictions_HHMMSS.csv: epoch, timestamp_s, prob_*, predicted_stage
     - eeg_100hz_HHMMSS.csv: sample_index, timestamp_ms, eeg_uv
+    - (optional) accel_HHMMSS.csv: sample_index, timestamp_ms, accel_x, accel_y, accel_z
 
 Usage:
     python tools/visualize_session.py <predictions_file> <eeg_file>
-    python tools/visualize_session.py predictions_120530.csv eeg_100hz_120530.csv
+    python tools/visualize_session.py predictions.csv eeg_100hz.csv --accel accel.csv
+
+    With accelerometer magnitude display:
+    python tools/visualize_session.py predictions.csv eeg_100hz.csv --accel accel.csv --accel-mode magnitude
+
+    Time axis in hours:
+    python tools/visualize_session.py predictions.csv eeg_100hz.csv --hours
 
     Or with a directory containing paired files:
     python tools/visualize_session.py --dir /path/to/realtime_logs/
@@ -56,6 +63,33 @@ def load_eeg(filepath):
     return df['eeg_uv'].values
 
 
+def load_accelerometer(filepath):
+    """Load accelerometer CSV file.
+
+    Supports both old format (accel_x, accel_y, accel_z) and
+    new format (accel_x_g, accel_y_g, accel_z_g in g units).
+    """
+    df = pd.read_csv(filepath)
+    print(f"Loaded {len(df)} accelerometer samples from {filepath}")
+
+    # Check for new format (with _g suffix indicating g units)
+    if 'accel_x_g' in df.columns:
+        accel_x = df['accel_x_g'].values
+        accel_y = df['accel_y_g'].values
+        accel_z = df['accel_z_g'].values
+        units = 'g'
+    else:
+        # Old format - raw values, convert to g
+        ACCEL_SCALE = 16.0 / 4095.0
+        accel_x = df['accel_x'].values * ACCEL_SCALE
+        accel_y = df['accel_y'].values * ACCEL_SCALE
+        accel_z = df['accel_z'].values * ACCEL_SCALE
+        units = 'g (converted)'
+
+    print(f"  Accelerometer units: {units}")
+    return accel_x, accel_y, accel_z, df['timestamp_ms'].values
+
+
 def compute_spectrogram(eeg_data, fs=SAMPLE_RATE, nperseg=256, noverlap=128):
     """Compute spectrogram of EEG data."""
     f, t, Sxx = signal.spectrogram(
@@ -77,41 +111,74 @@ def create_hypnogram(predictions_df):
     return timestamps, stages
 
 
-def plot_session(eeg_data, predictions_df, output_file=None, title="Sleep Session"):
-    """Create combined spectrogram + hypnogram plot."""
+def plot_session(eeg_data, predictions_df, output_file=None, title="Sleep Session",
+                 accel_data=None, accel_mode='xyz', show_hours=False, skip_spectrogram=False):
+    """Create combined spectrogram + hypnogram plot with optional accelerometer.
+
+    Args:
+        eeg_data: Preprocessed EEG data at 100Hz
+        predictions_df: DataFrame with predictions
+        output_file: Output file path (optional)
+        title: Plot title
+        accel_data: Tuple of (accel_x, accel_y, accel_z, timestamps_ms) or None
+        accel_mode: 'xyz' for individual traces, 'magnitude' for sqrt(x^2+y^2+z^2)
+        show_hours: If True, show time axis in hours instead of seconds
+        skip_spectrogram: If True, skip spectrogram computation (faster)
+    """
     import matplotlib.gridspec as gridspec
 
-    # Compute spectrogram
-    f, t_spec, Sxx = compute_spectrogram(eeg_data)
+    # Compute spectrogram if needed
+    if not skip_spectrogram:
+        f, t_spec, Sxx = compute_spectrogram(eeg_data)
 
     # Get hypnogram data
     t_hyp, stages = create_hypnogram(predictions_df)
 
-    # Create figure with GridSpec: 2 rows, 2 cols (main plots + colorbar column)
-    fig = plt.figure(figsize=(14, 7))
-    gs = gridspec.GridSpec(2, 2, height_ratios=[1, 3], width_ratios=[50, 1],
+    # Determine number of rows
+    has_accel = accel_data is not None
+    has_spec = not skip_spectrogram
+
+    if has_accel and has_spec:
+        n_rows = 3
+        height_ratios = [1, 2.5, 1.5]
+    elif has_accel:
+        n_rows = 2
+        height_ratios = [1, 1.5]
+    elif has_spec:
+        n_rows = 2
+        height_ratios = [1, 3]
+    else:
+        n_rows = 1
+        height_ratios = [1]
+
+    # Create figure with GridSpec
+    fig = plt.figure(figsize=(14, 3 + 3 * n_rows))
+    gs = gridspec.GridSpec(n_rows, 2, height_ratios=height_ratios, width_ratios=[50, 1],
                            hspace=0.08, wspace=0.02)
 
-    ax_hyp = fig.add_subplot(gs[0, 0])
-    ax_spec = fig.add_subplot(gs[1, 0], sharex=ax_hyp)
-    cax = fig.add_subplot(gs[1, 1])  # Colorbar axes aligned with spectrogram only
+    # Time conversion factor
+    time_scale = 3600 if show_hours else 1
+    time_label = 'Time (hours)' if show_hours else 'Time (seconds)'
+
+    # Scale time data
+    t_hyp_scaled = t_hyp / time_scale
 
     # --- Hypnogram (top) ---
+    ax_hyp = fig.add_subplot(gs[0, 0])
 
     # Plot as step function with colored bars
     for i in range(len(stages)):
-        start = t_hyp[i] - EPOCH_DURATION
-        end = t_hyp[i]
+        start = (t_hyp[i] - EPOCH_DURATION) / time_scale
+        end = t_hyp[i] / time_scale
         stage = stages[i]
         ax_hyp.axvspan(start, end, color=STAGE_COLORS[stage], alpha=0.7)
 
     # Plot step line
-    # Create step-like x coordinates
     x_steps = []
     y_steps = []
     for i in range(len(stages)):
-        start = t_hyp[i] - EPOCH_DURATION
-        end = t_hyp[i]
+        start = (t_hyp[i] - EPOCH_DURATION) / time_scale
+        end = t_hyp[i] / time_scale
         x_steps.extend([start, end])
         y_steps.extend([stages[i], stages[i]])
 
@@ -121,7 +188,7 @@ def plot_session(eeg_data, predictions_df, output_file=None, title="Sleep Sessio
     ax_hyp.set_yticks([0, 1, 2, 3, 4])
     ax_hyp.set_yticklabels(STAGE_NAMES)
     ax_hyp.set_ylim(-0.5, 4.5)
-    ax_hyp.invert_yaxis()  # Wake at top, deep sleep at bottom
+    ax_hyp.invert_yaxis()
     ax_hyp.set_title(title)
     ax_hyp.grid(True, alpha=0.3)
 
@@ -131,35 +198,71 @@ def plot_session(eeg_data, predictions_df, output_file=None, title="Sleep Sessio
                        for i in range(5)]
     ax_hyp.legend(handles=legend_elements, loc='upper right', ncol=5, fontsize=8)
 
-    # --- Spectrogram (bottom) ---
+    max_time = t_hyp[-1] / time_scale
+    current_row = 1
 
-    # Focus on sleep-relevant frequencies (0.5-30 Hz)
-    freq_mask = (f >= 0.5) & (f <= 30)
-    f_plot = f[freq_mask]
-    Sxx_plot = Sxx[freq_mask, :]
+    # --- Spectrogram ---
+    if has_spec:
+        ax_spec = fig.add_subplot(gs[current_row, 0], sharex=ax_hyp)
+        cax = fig.add_subplot(gs[current_row, 1])
 
-    # Plot spectrogram
-    im = ax_spec.pcolormesh(t_spec, f_plot, Sxx_plot,
-                            shading='gouraud', cmap='viridis',
-                            vmin=np.percentile(Sxx_plot, 5),
-                            vmax=np.percentile(Sxx_plot, 95))
+        t_spec_scaled = t_spec / time_scale
 
-    ax_spec.set_ylabel('Frequency (Hz)')
-    ax_spec.set_xlabel('Time (seconds)')
-    ax_spec.set_ylim(0.5, 30)
+        # Focus on sleep-relevant frequencies
+        freq_mask = (f >= 0.5) & (f <= 30)
+        f_plot = f[freq_mask]
+        Sxx_plot = Sxx[freq_mask, :]
 
-    # Set x-axis limits to remove blank space (use max timestamp from data)
-    max_time = max(t_hyp[-1], t_spec[-1])
+        im = ax_spec.pcolormesh(t_spec_scaled, f_plot, Sxx_plot,
+                                shading='gouraud', cmap='viridis',
+                                vmin=np.percentile(Sxx_plot, 5),
+                                vmax=np.percentile(Sxx_plot, 95))
+
+        ax_spec.set_ylabel('Frequency (Hz)')
+        ax_spec.set_ylim(0.5, 30)
+
+        # Frequency band lines
+        ax_spec.axhline(y=4, color='white', linestyle='--', alpha=0.5, linewidth=0.5)
+        ax_spec.axhline(y=8, color='white', linestyle='--', alpha=0.5, linewidth=0.5)
+        ax_spec.axhline(y=12, color='white', linestyle='--', alpha=0.5, linewidth=0.5)
+
+        fig.colorbar(im, cax=cax, label='Power (dB)')
+
+        max_time = max(max_time, t_spec_scaled[-1])
+        current_row += 1
+
+        if not has_accel:
+            ax_spec.set_xlabel(time_label)
+
+    # --- Accelerometer ---
+    if has_accel:
+        accel_x, accel_y, accel_z, accel_t_ms = accel_data
+        accel_t = accel_t_ms / 1000.0 / time_scale  # Convert ms to time_scale units
+
+        ax_accel = fig.add_subplot(gs[current_row, 0], sharex=ax_hyp)
+
+        if accel_mode == 'magnitude':
+            # Plot activity magnitude
+            magnitude = np.sqrt(accel_x**2 + accel_y**2 + accel_z**2)
+            ax_accel.plot(accel_t, magnitude, 'b-', linewidth=0.5, alpha=0.8)
+            ax_accel.set_ylabel('Activity (g)')
+        else:
+            # Plot individual X, Y, Z traces
+            ax_accel.plot(accel_t, accel_x, 'r-', linewidth=0.5, alpha=0.7, label='X')
+            ax_accel.plot(accel_t, accel_y, 'g-', linewidth=0.5, alpha=0.7, label='Y')
+            ax_accel.plot(accel_t, accel_z, 'b-', linewidth=0.5, alpha=0.7, label='Z')
+            ax_accel.legend(loc='upper right', ncol=3, fontsize=8)
+            ax_accel.set_ylabel('Acceleration (g)')
+
+        ax_accel.set_xlabel(time_label)
+        ax_accel.grid(True, alpha=0.3)
+
+        max_time = max(max_time, accel_t[-1])
+
+    # Set x-axis limits
     ax_hyp.set_xlim(0, max_time)
-    ax_spec.set_xlim(0, max_time)
 
-    # Add frequency band annotations (horizontal lines only)
-    ax_spec.axhline(y=4, color='white', linestyle='--', alpha=0.5, linewidth=0.5)
-    ax_spec.axhline(y=8, color='white', linestyle='--', alpha=0.5, linewidth=0.5)
-    ax_spec.axhline(y=12, color='white', linestyle='--', alpha=0.5, linewidth=0.5)
-
-    # Add colorbar in dedicated axes (already aligned with spectrogram via GridSpec)
-    cbar = fig.colorbar(im, cax=cax, label='Power (dB)')
+    plt.tight_layout()
 
     if output_file:
         plt.savefig(output_file, dpi=150, bbox_inches='tight')
@@ -255,6 +358,17 @@ def main():
     parser.add_argument('--probs', action='store_true',
                         help='Also plot probability timeline')
 
+    # Accelerometer options
+    parser.add_argument('--accel', help='Accelerometer CSV file')
+    parser.add_argument('--accel-mode', choices=['xyz', 'magnitude'], default='xyz',
+                        help='Accelerometer display mode: xyz (individual traces) or magnitude')
+
+    # Display options
+    parser.add_argument('--hours', action='store_true',
+                        help='Show time axis in hours instead of seconds')
+    parser.add_argument('--no-spec', action='store_true',
+                        help='Skip spectrogram computation (faster)')
+
     args = parser.parse_args()
 
     # Determine input files
@@ -279,6 +393,15 @@ def main():
     predictions_df = load_predictions(pred_file)
     eeg_data = load_eeg(eeg_file)
 
+    # Load accelerometer if provided
+    accel_data = None
+    if args.accel:
+        accel_file = Path(args.accel)
+        if accel_file.exists():
+            accel_data = load_accelerometer(accel_file)
+        else:
+            print(f"WARNING: Accelerometer file not found: {accel_file}")
+
     # Print summary
     print_summary(predictions_df)
 
@@ -288,9 +411,13 @@ def main():
         output_file = pred_file.stem.replace('predictions', 'session_plot') + '.png'
 
     # Create main visualization
-    print("Generating spectrogram + hypnogram plot...")
+    print("Generating visualization...")
     plot_session(eeg_data, predictions_df, output_file,
-                 title=f"Sleep Session: {pred_file.stem}")
+                 title=f"Sleep Session: {pred_file.stem}",
+                 accel_data=accel_data,
+                 accel_mode=args.accel_mode,
+                 show_hours=args.hours,
+                 skip_spectrogram=args.no_spec)
 
     # Optionally plot probabilities
     if args.probs:
