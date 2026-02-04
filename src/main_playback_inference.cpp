@@ -6,10 +6,18 @@
 #include "MLInference.h"
 #include "model.h"
 #include "Config.h"
-#include "PreprocessingPipeline.h"
 #include "EEGQualityChecker.h"
 #include "InferenceLogger.h"
 #include "DebugLogger.h"
+
+// Preprocessing pipeline selection based on build flags
+#if defined(USE_ALT_PREPROCESSING_A) || defined(USE_ALT_PREPROCESSING_B) || defined(USE_ALT_PREPROCESSING_C) || defined(USE_ALT_PREPROCESSING_D)
+  #include "PreprocessingPipelineAlt.h"
+  #define USING_ALT_PIPELINE 1
+#else
+  #include "PreprocessingPipeline.h"
+  #define USING_ALT_PIPELINE 0
+#endif
 
 // Include validation support if enabled
 #ifdef ENABLE_VALIDATION_MODE
@@ -27,7 +35,14 @@ unsigned long SAMPLE_INTERVAL_US = 250; // Will be set from config (4000Hz = 250
 EEGFileReader eegReader;
 EEGProcessor eegProcessor;
 MLInference mlInference;
+
+// Preprocessing pipeline (selected at compile time)
+#if USING_ALT_PIPELINE
+PreprocessingPipelineAlt preprocessingPipeline;
+#else
 PreprocessingPipeline preprocessingPipeline;
+#endif
+
 EEGQualityChecker qualityChecker;
 InferenceLogger inferenceLogger;
 DebugLogger debugLogger;
@@ -65,7 +80,8 @@ unsigned long samples_since_timing_reset = 0;
 bool enable_inference = true;
 bool enable_serial_plot = !FAST_PLAYBACK;  // Disable plotting in fast mode (printing slows down processing)
 bool enable_quality_check = true;
-bool enable_inference_logging = false;  // OFF by default for fast playback (toggle with 'l')
+bool enable_inference_logging = true;   // ON by default to capture all epochs (toggle with 'l')
+bool enable_timing_output = false;      // OFF by default (toggle with 't')
 
 // EEG logging variables (for visualization)
 SdFile eegLogFile;
@@ -148,7 +164,8 @@ void setup() {
   Serial.println("  p - Toggle serial plotting");
   Serial.println("  i - Toggle ML inference");
   Serial.println("  s - Show statistics");
-  Serial.println("  l - Toggle logging (predictions + 100Hz EEG to SD)");
+  Serial.println("  l - Toggle logging (predictions + 100Hz EEG to SD) [ON by default]");
+  Serial.println("  t - Toggle timing output");
   Serial.println("  d - Toggle debug logging (CSV output)");
   Serial.println("  r - Restart playback");
   Serial.println();
@@ -260,9 +277,29 @@ void setup() {
   
   // Configure sliding window parameters
   eegProcessor.configureSlidingWindow(INFERENCE_WINDOW_SECONDS, INFERENCE_INTERVAL_SECONDS);
-  
-  // Note: Logging is OFF by default for fast playback
-  // Press 'l' to enable logging (predictions + 100Hz EEG to SD card)
+
+  // Configure preprocessing pipeline
+#if USING_ALT_PIPELINE
+  #if defined(USE_ALT_PREPROCESSING_A)
+    preprocessingPipeline.setDownsampleMethod(PreprocessingPipelineAlt::DECIMATE);
+    Serial.println("Using ALT preprocessing A: 4kHz->500Hz(decimate)->100Hz(avg)->filter@100Hz");
+  #elif defined(USE_ALT_PREPROCESSING_B)
+    preprocessingPipeline.setDownsampleMethod(PreprocessingPipelineAlt::AVERAGE);
+    Serial.println("Using ALT preprocessing B: 4kHz->500Hz(average)->100Hz(avg)->filter@100Hz");
+  #elif defined(USE_ALT_PREPROCESSING_C)
+    preprocessingPipeline.setDownsampleMethod(PreprocessingPipelineAlt::DIRECT_DECIMATE);
+    Serial.println("Using ALT preprocessing C: 4kHz->100Hz(decimate, every 40th)->filter@100Hz");
+  #elif defined(USE_ALT_PREPROCESSING_D)
+    preprocessingPipeline.setDownsampleMethod(PreprocessingPipelineAlt::DIRECT_AVERAGE);
+    Serial.println("Using ALT preprocessing D: 4kHz->100Hz(average 40 samples)->filter@100Hz");
+  #endif
+#else
+  Serial.println("Using STANDARD preprocessing: 4kHz->250Hz->filter@250Hz->100Hz");
+#endif
+
+  // Initialize logging (ON by default to capture all epochs)
+  // Press 'l' to disable logging if not needed
+  initializeLogging();
 
   // Initialize debug logger
   if (debugLogger.begin(&sd)) {
@@ -458,7 +495,7 @@ void loop() {
               // }
 
               // Timing: measure data loading time (time since last inference ended)
-              if (last_inference_end_time > 0) {
+              if (enable_timing_output && last_inference_end_time > 0) {
                 unsigned long data_load_time_ms = (micros() - last_inference_end_time) / 1000;
                 Serial.print("[TIMING] Data loading took ");
                 Serial.print(data_load_time_ms);
@@ -474,19 +511,21 @@ void loop() {
                 Serial.print(" ms, Other: ");
                 Serial.print(data_load_time_ms - (total_read_time_us + total_preprocess_time_us) / 1000);
                 Serial.println(" ms");
-
-                // Reset counters
-                total_read_time_us = 0;
-                total_preprocess_time_us = 0;
-                samples_since_timing_reset = 0;
               }
+
+              // Reset timing counters (always, even if not printing)
+              total_read_time_us = 0;
+              total_preprocess_time_us = 0;
+              samples_since_timing_reset = 0;
 
               unsigned long inference_start = micros();
               if (mlInference.predict(processed_window, ml_output, inference_count)) {
                 unsigned long inference_time_ms = (micros() - inference_start) / 1000;
-                Serial.print("[TIMING] Inference took ");
-                Serial.print(inference_time_ms);
-                Serial.println(" ms");
+                if (enable_timing_output) {
+                  Serial.print("[TIMING] Inference took ");
+                  Serial.print(inference_time_ms);
+                  Serial.println(" ms");
+                }
                 last_inference_end_time = micros();  // Mark when inference finished
 
                 SleepStage predicted_stage = mlInference.getPredictedStage(ml_output);
@@ -750,8 +789,14 @@ void handleSerialCommands() {
         }
         break;
 
+      case 't':
+        enable_timing_output = !enable_timing_output;
+        Serial.print("Timing output: ");
+        Serial.println(enable_timing_output ? "ON" : "OFF");
+        break;
+
       default:
-        Serial.println("Unknown command. Use p/i/d/s/r/l");
+        Serial.println("Unknown command. Use p/i/d/s/r/l/t");
         break;
     }
   }
