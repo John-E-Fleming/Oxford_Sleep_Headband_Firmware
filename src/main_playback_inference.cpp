@@ -37,8 +37,9 @@ EEGProcessor eegProcessor;
 MLInference mlInference;
 
 // Preprocessing pipeline (selected at compile time)
+// For alt pipeline, we use a pointer to allow late initialization with sample rate
 #if USING_ALT_PIPELINE
-PreprocessingPipelineAlt preprocessingPipeline;
+PreprocessingPipelineAlt* preprocessingPipeline = nullptr;
 #else
 PreprocessingPipeline preprocessingPipeline;
 #endif
@@ -225,12 +226,13 @@ void setup() {
       // Set sample interval based on config
       SAMPLE_INTERVAL_US = 1000000 / config.sample_rate; // Convert Hz to microseconds
 
-      // Warn if sample rate is not 4000Hz
-      if (config.sample_rate != 4000) {
-        Serial.println("WARNING: Preprocessing pipeline expects 4000Hz input!");
-        Serial.println("         Please update config.txt sample_rate to 4000");
+      // Validate sample rate is divisible by 100 (required for downsampling to 100Hz)
+      if (config.sample_rate % 100 != 0) {
+        Serial.println("ERROR: sample_rate must be divisible by 100!");
+        Serial.print("       Current value: ");
+        Serial.println(config.sample_rate);
       }
-      
+
       rootDir.close();
     } else {
       Serial.println("Failed to load config.txt, using defaults");
@@ -280,18 +282,38 @@ void setup() {
 
   // Configure preprocessing pipeline
 #if USING_ALT_PIPELINE
+  // Create preprocessor with configured sample rate
+  preprocessingPipeline = new PreprocessingPipelineAlt(config.sample_rate);
+  Serial.print("Preprocessing pipeline initialized for ");
+  Serial.print(config.sample_rate);
+  Serial.print(" Hz input (");
+  Serial.print(preprocessingPipeline->getDownsampleRatio());
+  Serial.println(":1 downsampling to 100Hz)");
+
   #if defined(USE_ALT_PREPROCESSING_A)
-    preprocessingPipeline.setDownsampleMethod(PreprocessingPipelineAlt::DECIMATE);
-    Serial.println("Using ALT preprocessing A: 4kHz->500Hz(decimate)->100Hz(avg)->filter@100Hz");
+    preprocessingPipeline->setDownsampleMethod(PreprocessingPipelineAlt::DECIMATE);
+    if (config.sample_rate == 4000) {
+      Serial.println("Using ALT preprocessing A: 4kHz->500Hz(decimate)->100Hz(avg)->filter@100Hz");
+    } else {
+      Serial.println("NOTE: Option A requires 4kHz, falling back to Option D (direct average)");
+    }
   #elif defined(USE_ALT_PREPROCESSING_B)
-    preprocessingPipeline.setDownsampleMethod(PreprocessingPipelineAlt::AVERAGE);
-    Serial.println("Using ALT preprocessing B: 4kHz->500Hz(average)->100Hz(avg)->filter@100Hz");
+    preprocessingPipeline->setDownsampleMethod(PreprocessingPipelineAlt::AVERAGE);
+    if (config.sample_rate == 4000) {
+      Serial.println("Using ALT preprocessing B: 4kHz->500Hz(average)->100Hz(avg)->filter@100Hz");
+    } else {
+      Serial.println("NOTE: Option B requires 4kHz, falling back to Option D (direct average)");
+    }
   #elif defined(USE_ALT_PREPROCESSING_C)
-    preprocessingPipeline.setDownsampleMethod(PreprocessingPipelineAlt::DIRECT_DECIMATE);
-    Serial.println("Using ALT preprocessing C: 4kHz->100Hz(decimate, every 40th)->filter@100Hz");
+    preprocessingPipeline->setDownsampleMethod(PreprocessingPipelineAlt::DIRECT_DECIMATE);
+    Serial.print("Using ALT preprocessing C: ");
+    Serial.print(config.sample_rate);
+    Serial.println("Hz->100Hz(decimate)->filter@100Hz");
   #elif defined(USE_ALT_PREPROCESSING_D)
-    preprocessingPipeline.setDownsampleMethod(PreprocessingPipelineAlt::DIRECT_AVERAGE);
-    Serial.println("Using ALT preprocessing D: 4kHz->100Hz(average 40 samples)->filter@100Hz");
+    preprocessingPipeline->setDownsampleMethod(PreprocessingPipelineAlt::DIRECT_AVERAGE);
+    Serial.print("Using ALT preprocessing D: ");
+    Serial.print(config.sample_rate);
+    Serial.println("Hz->100Hz(average)->filter@100Hz");
   #endif
 #else
   Serial.println("Using STANDARD preprocessing: 4kHz->250Hz->filter@250Hz->100Hz");
@@ -416,10 +438,14 @@ void loop() {
       //   if (sample_count == 20) logged_first_samples = true;
       // }
 
-      // Process through complete pipeline: 4000Hz -> 250Hz -> BP filter -> 100Hz
+      // Process through complete pipeline: input_rate -> 100Hz
       float output_100hz;
       unsigned long preprocess_start = micros();
+#if USING_ALT_PIPELINE
+      bool sample_ready = preprocessingPipeline->processSample(bipolar_sample, output_100hz);
+#else
       bool sample_ready = preprocessingPipeline.processSample(bipolar_sample, output_100hz);
+#endif
       total_preprocess_time_us += (micros() - preprocess_start);
 
       // DEBUG: Log first 20 samples at 100Hz (disabled for speed)

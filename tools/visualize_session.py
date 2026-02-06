@@ -112,7 +112,8 @@ def create_hypnogram(predictions_df):
 
 
 def plot_session(eeg_data, predictions_df, output_file=None, title="Sleep Session",
-                 accel_data=None, accel_mode='xyz', show_hours=False, skip_spectrogram=False):
+                 accel_data=None, accel_mode='xyz', show_hours=False, skip_spectrogram=False,
+                 show_probabilities=False):
     """Create combined spectrogram + hypnogram plot with optional accelerometer.
 
     Args:
@@ -124,8 +125,13 @@ def plot_session(eeg_data, predictions_df, output_file=None, title="Sleep Sessio
         accel_mode: 'xyz' for individual traces, 'magnitude' for sqrt(x^2+y^2+z^2)
         show_hours: If True, show time axis in hours instead of seconds
         skip_spectrogram: If True, skip spectrogram computation (faster)
+        show_probabilities: If True, show probability panel instead of spectrogram
     """
     import matplotlib.gridspec as gridspec
+
+    # If showing probabilities, skip spectrogram
+    if show_probabilities:
+        skip_spectrogram = True
 
     # Compute spectrogram if needed
     if not skip_spectrogram:
@@ -137,16 +143,17 @@ def plot_session(eeg_data, predictions_df, output_file=None, title="Sleep Sessio
     # Determine number of rows
     has_accel = accel_data is not None
     has_spec = not skip_spectrogram
+    has_probs = show_probabilities
 
-    if has_accel and has_spec:
+    if has_accel and (has_spec or has_probs):
         n_rows = 3
         height_ratios = [1, 2.5, 1.5]
     elif has_accel:
         n_rows = 2
         height_ratios = [1, 1.5]
-    elif has_spec:
+    elif has_spec or has_probs:
         n_rows = 2
-        height_ratios = [1, 3]
+        height_ratios = [1, 2.5]
     else:
         n_rows = 1
         height_ratios = [1]
@@ -233,6 +240,50 @@ def plot_session(eeg_data, predictions_df, output_file=None, title="Sleep Sessio
 
         if not has_accel:
             ax_spec.set_xlabel(time_label)
+
+    # --- Probability Heatmap Panel ---
+    if has_probs:
+        ax_prob = fig.add_subplot(gs[current_row, 0], sharex=ax_hyp)
+        cax_prob = fig.add_subplot(gs[current_row, 1])
+
+        # Get probability columns in order: Wake, REM, N1, N2, N3 (matching hypnogram order)
+        prob_cols = ['prob_wake', 'prob_rem', 'prob_n1', 'prob_n2', 'prob_n3']
+        prob_labels = ['Wake', 'REM', 'N1 VeryLight', 'N2 Light', 'N3 Deep']
+
+        # Build probability matrix (stages x epochs)
+        n_epochs = len(predictions_df)
+        probs = np.zeros((5, n_epochs))
+        for i, col in enumerate(prob_cols):
+            probs[i, :] = predictions_df[col].values
+
+        # Create time edges for pcolormesh (need n+1 edges for n cells)
+        timestamps = predictions_df['timestamp_s'].values
+        # Each epoch covers [t - EPOCH_DURATION, t], so create edges accordingly
+        time_edges = np.zeros(n_epochs + 1)
+        time_edges[0] = (timestamps[0] - EPOCH_DURATION) / time_scale
+        time_edges[1:] = timestamps / time_scale
+
+        # Stage edges (0.5 spacing centered on 0, 1, 2, 3, 4)
+        stage_edges = np.array([-0.5, 0.5, 1.5, 2.5, 3.5, 4.5])
+
+        # Plot heatmap
+        im = ax_prob.pcolormesh(time_edges, stage_edges, probs,
+                                shading='flat', cmap='viridis',
+                                vmin=0, vmax=1)
+
+        ax_prob.set_ylabel('Sleep Stage')
+        ax_prob.set_yticks([0, 1, 2, 3, 4])
+        ax_prob.set_yticklabels(prob_labels)
+        ax_prob.set_ylim(-0.5, 4.5)
+        ax_prob.invert_yaxis()  # Wake at top, N3 at bottom
+
+        fig.colorbar(im, cax=cax_prob, label='Probability')
+
+        max_time = max(max_time, time_edges[-1])
+        current_row += 1
+
+        if not has_accel:
+            ax_prob.set_xlabel(time_label)
 
     # --- Accelerometer ---
     if has_accel:
@@ -368,6 +419,8 @@ def main():
                         help='Show time axis in hours instead of seconds')
     parser.add_argument('--no-spec', action='store_true',
                         help='Skip spectrogram computation (faster)')
+    parser.add_argument('--show-probs', action='store_true',
+                        help='Show probability panel instead of spectrogram')
 
     args = parser.parse_args()
 
@@ -391,7 +444,13 @@ def main():
     # Load data
     print("\nLoading data...")
     predictions_df = load_predictions(pred_file)
-    eeg_data = load_eeg(eeg_file)
+
+    # Try to load EEG data (may be empty or file may not exist)
+    eeg_data = np.array([])
+    if eeg_file.exists():
+        eeg_data = load_eeg(eeg_file)
+    else:
+        print(f"WARNING: EEG file not found: {eeg_file}")
 
     # Load accelerometer if provided
     accel_data = None
@@ -410,6 +469,13 @@ def main():
     if not output_file:
         output_file = pred_file.stem.replace('predictions', 'session_plot') + '.png'
 
+    # Auto-skip spectrogram if EEG data is empty or too short
+    skip_spectrogram = args.no_spec
+    if len(eeg_data) < 256:  # Need at least nperseg samples for spectrogram
+        if not args.no_spec:
+            print("NOTE: EEG data too short for spectrogram, skipping (use --no-spec to suppress this)")
+        skip_spectrogram = True
+
     # Create main visualization
     print("Generating visualization...")
     plot_session(eeg_data, predictions_df, output_file,
@@ -417,7 +483,8 @@ def main():
                  accel_data=accel_data,
                  accel_mode=args.accel_mode,
                  show_hours=args.hours,
-                 skip_spectrogram=args.no_spec)
+                 skip_spectrogram=skip_spectrogram,
+                 show_probabilities=args.show_probs)
 
     # Optionally plot probabilities
     if args.probs:
